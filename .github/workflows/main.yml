@@ -46,7 +46,7 @@ jobs:
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 5. Android Manifest (Arka Plan ve GPS İzinleri)
+          # 5. Android Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -85,7 +85,7 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Admin Paneli ile Tam Uyumlu Kod (lib/main.dart)
+          # 6. Canlı Hareket & GPS Sinyal Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -120,23 +120,31 @@ jobs:
             String driverName = "";
             String activeKey = "";
             StreamSubscription<Position>? _positionStream;
+            Timer? _heartbeatTimer;
 
-            Future<void> updateDriverOnline(String key, double lat, double lng) async {
+            Future<void> sendDriverLocation(String key, Position pos) async {
               try {
+                int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
                   Uri.parse("$FIREBASE_URL/$key.json"),
                   body: json.encode({
-                    'lat': lat,
-                    'lng': lng,
-                    'latitude': lat,
-                    'longitude': lng,
+                    'lat': pos.latitude,
+                    'lng': pos.longitude,
+                    'latitude': pos.latitude,
+                    'longitude': pos.longitude,
+                    'speed': pos.speed > 0 ? pos.speed : 0.0,
+                    'heading': pos.heading,
+                    'bearing': pos.heading,
+                    'accuracy': pos.accuracy,
+                    'isMoving': pos.speed > 0.5,
                     'status': 'available',
                     'isOnline': true,
                     'online': true,
                     'active': true,
                     'workingStatus': 'working',
-                    'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
-                    'lastActive': DateTime.now().millisecondsSinceEpoch,
+                    'lastGpsUpdate': now,
+                    'lastActive': now,
+                    'timestamp': now,
                   }),
                 );
               } catch (_) {}
@@ -144,6 +152,7 @@ jobs:
 
             Future<void> updateDriverOffline(String key) async {
               try {
+                int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
                   Uri.parse("$FIREBASE_URL/$key.json"),
                   body: json.encode({
@@ -151,8 +160,9 @@ jobs:
                     'isOnline': false,
                     'online': false,
                     'active': false,
+                    'isMoving': false,
                     'workingStatus': 'resting',
-                    'lastActive': DateTime.now().millisecondsSinceEpoch,
+                    'lastActive': now,
                   }),
                 );
               } catch (_) {}
@@ -181,39 +191,40 @@ jobs:
                 await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                // İlk konum alıp anında Online yap
+                // İlk konum
                 try {
                   Position initialPos = await Geolocator.getCurrentPosition(
-                    desiredAccuracy: LocationAccuracy.high,
-                    timeLimit: const Duration(seconds: 5),
+                    desiredAccuracy: LocationAccuracy.bestForNavigation,
+                    timeLimit: const Duration(seconds: 4),
                   );
-                  await updateDriverOnline(key, initialPos.latitude, initialPos.longitude);
-                } catch (_) {
-                  // İlk konum gecikirse bile direkt online yap
-                  await http.patch(
-                    Uri.parse("$FIREBASE_URL/$key.json"),
-                    body: json.encode({
-                      'status': 'available',
-                      'isOnline': true,
-                      'online': true,
-                      'active': true,
-                      'workingStatus': 'working',
-                    }),
-                  );
-                }
+                  await sendDriverLocation(key, initialPos);
+                } catch (_) {}
 
+                // Canlı GPS Dinleme (0 metre hassasiyet)
                 const LocationSettings locationSettings = LocationSettings(
-                  accuracy: LocationAccuracy.high,
-                  distanceFilter: 3,
+                  accuracy: LocationAccuracy.bestForNavigation,
+                  distanceFilter: 0,
                 );
 
                 _positionStream?.cancel();
                 _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
                   (Position position) {
-                    updateDriverOnline(key, position.latitude, position.longitude);
+                    sendDriverLocation(key, position);
                   },
                   onError: (err) {},
                 );
+
+                // Periyodik Canlı Tutma Sinyali (Her 3 saniyede bir admin paneline canlı sinyal atar)
+                _heartbeatTimer?.cancel();
+                _heartbeatTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+                  try {
+                    Position currentPos = await Geolocator.getCurrentPosition(
+                      desiredAccuracy: LocationAccuracy.high,
+                      timeLimit: const Duration(seconds: 2),
+                    );
+                    await sendDriverLocation(key, currentPos);
+                  } catch (_) {}
+                });
 
                 if (mounted) {
                   setState(() {
@@ -232,6 +243,8 @@ jobs:
             void stopTracking() async {
               _positionStream?.cancel();
               _positionStream = null;
+              _heartbeatTimer?.cancel();
+              _heartbeatTimer = null;
               WakelockPlus.disable();
               if (activeKey.isNotEmpty) {
                 await updateDriverOffline(activeKey);
@@ -411,7 +424,7 @@ jobs:
                                           ),
                                           const SizedBox(height: 10),
                                           const Text(
-                                            "أنت الآن متصل ونشط على لوحة التحكم ومتاح لاستقبال طلبات الزبائن مباشرة",
+                                            "أنت الآن متصل وتطبيقك يرسل تحديثات الموقع المباشرة كل ثوانٍ إلى لوحة التحكم",
                                             textAlign: TextAlign.center,
                                             style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.4),
                                           ),
@@ -523,4 +536,5 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
