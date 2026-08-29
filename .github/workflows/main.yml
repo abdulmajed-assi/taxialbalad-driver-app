@@ -29,14 +29,14 @@ jobs:
           cd build_app
           
           # 1. Kütüphaneleri ekle
-          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
+          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler flutter_local_notifications
 
           # 2. JVM Bellek Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # 3. Kotlin 1.9.22 Güncellemesi (settings.gradle & build.gradle)
+          # 3. Kotlin 1.9.22 Güncellemesi
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
@@ -98,13 +98,14 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Flutter Kodları (lib/main.dart)
+          # 6. Özel Tasarımlı ve Stabil Kod (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
           import 'package:flutter_background_service/flutter_background_service.dart';
           import 'package:flutter_background_service_android/flutter_background_service_android.dart';
+          import 'package:flutter_local_notifications/flutter_local_notifications.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
@@ -168,46 +169,71 @@ jobs:
             final _phone = TextEditingController();
             final _pass = TextEditingController();
             bool isOnline = false;
+            bool isLoading = false;
             String driverName = "";
 
             Future<void> startTracking(String key, String name) async {
-              await Permission.notification.request();
-              await Permission.location.request();
-              if (await Permission.location.isGranted) {
-                await Permission.locationAlways.request();
+              try {
+                await Permission.notification.request();
+                await Permission.location.request();
+                if (await Permission.location.isGranted) {
+                  await Permission.locationAlways.request();
+                }
+                await Permission.ignoreBatteryOptimizations.request();
+
+                const AndroidNotificationChannel channel = AndroidNotificationChannel(
+                  'taxi_location_channel',
+                  'خدمة التتبع المباشر',
+                  description: 'تتبع موقع كابتن تكسي البلد في الخلفية',
+                  importance: Importance.low,
+                );
+
+                final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+                await flutterLocalNotificationsPlugin
+                    .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+                    ?.createNotificationChannel(channel);
+
+                final service = FlutterBackgroundService();
+                await service.configure(
+                  androidConfiguration: AndroidConfiguration(
+                    onStart: onStart,
+                    autoStart: false,
+                    isForegroundMode: true,
+                    notificationChannelId: 'taxi_location_channel',
+                    initialNotificationTitle: '🚖 كابتن تكسي البلد',
+                    initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
+                    foregroundServiceTypes: [AndroidForegroundType.location],
+                  ),
+                  iosConfiguration: IosConfiguration(),
+                );
+
+                await service.startService();
+                service.invoke('setDriver', {'driverKey': key});
+
+                setState(() {
+                  isOnline = true;
+                  driverName = name;
+                });
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل بدء الخدمة: $e")));
               }
-              await Permission.ignoreBatteryOptimizations.request();
-
-              final service = FlutterBackgroundService();
-              await service.configure(
-                androidConfiguration: AndroidConfiguration(
-                  onStart: onStart,
-                  autoStart: false,
-                  isForegroundMode: true,
-                  notificationChannelId: 'taxi_location_channel',
-                  initialNotificationTitle: '🚖 كابتن تكسي البلد',
-                  initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
-                  foregroundServiceTypes: [AndroidForegroundType.location],
-                ),
-                iosConfiguration: IosConfiguration(),
-              );
-
-              await service.startService();
-              service.invoke('setDriver', {'driverKey': key});
-
-              setState(() {
-                isOnline = true;
-                driverName = name;
-              });
             }
 
             void handleLogin() async {
+              FocusScope.of(context).unfocus();
               String p = _phone.text.trim().replaceAll(RegExp(r'[^0-9]'), '');
               String pass = _pass.text.trim();
-              if (p.isEmpty || pass.isEmpty) return;
+              if (p.isEmpty || pass.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("يرجى إدخال رقم الهاتف ورمز المرور")),
+                );
+                return;
+              }
 
               if (p.startsWith('0')) p = '963${p.substring(1)}';
               else if (!p.startsWith('963')) p = '963$p';
+
+              setState(() => isLoading = true);
 
               try {
                 final res = await http.get(Uri.parse("$FIREBASE_URL.json"));
@@ -230,89 +256,234 @@ jobs:
                     await startTracking(matchKey!, matchName!);
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("رقم الهاتف أو الرمز غير صحيح")),
+                      const SnackBar(content: Text("رقم الهاتف أو رمز المرور غير صحيح")),
                     );
                   }
                 }
               } catch (e) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("خطأ: $e")),
+                  SnackBar(content: Text("حدث خطأ أثناء الاتصال: $e")),
                 );
+              } finally {
+                setState(() => isLoading = false);
               }
+            }
+
+            Widget buildTaxiBorderHeader() {
+              return SizedBox(
+                height: 14,
+                child: Row(
+                  children: List.generate(18, (index) => Expanded(
+                    child: Container(
+                      color: index % 2 == 0 ? const Color(0xFFFFB800) : Colors.black,
+                    ),
+                  )),
+                ),
+              );
             }
 
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                backgroundColor: const Color(0xFF111111),
-                appBar: AppBar(
-                  title: const Text("تكسي البلد | تطبيق الكابتن"),
-                  backgroundColor: const Color(0xFFfcba03),
-                  foregroundColor: Colors.black,
-                ),
-                body: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: isOnline
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.check_circle, color: Colors.green, size: 90),
-                              const SizedBox(height: 20),
-                              Text("مرحباً بك كابتن $driverName", style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 10),
-                              const Text("أنت الآن أونلاين والموقع يرسل في الخلفية حتى مع إغلاق الشاشة", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, fontSize: 15)),
-                              const SizedBox(height: 40),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size.fromHeight(55)),
-                                onPressed: () {
-                                  FlutterBackgroundService().invoke('stopService');
-                                  setState(() => isOnline = false);
-                                },
-                                child: const Text("إيقاف الاستقبال والعمل", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                              )
-                            ],
-                          ),
-                        )
-                      : Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            TextField(
-                              controller: _phone,
-                              keyboardType: TextInputType.phone,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                labelText: "رقم الهاتف",
-                                labelStyle: TextStyle(color: Color(0xFFfcba03)),
-                                prefixText: "+963 ",
-                                prefixStyle: TextStyle(color: Colors.white),
-                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFfcba03))),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            TextField(
-                              controller: _pass,
-                              obscureText: true,
-                              style: const TextStyle(color: Colors.white),
-                              decoration: const InputDecoration(
-                                labelText: "رمز المرور (PIN)",
-                                labelStyle: TextStyle(color: Color(0xFFfcba03)),
-                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFfcba03))),
-                              ),
-                            ),
-                            const SizedBox(height: 25),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFfcba03),
-                                minimumSize: const Size.fromHeight(55),
-                              ),
-                              onPressed: handleLogin,
-                              child: const Text("تسجيل الدخول وبدء العمل", style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold)),
+                backgroundColor: const Color(0xFF141414),
+                body: SafeArea(
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1C1C1E),
+                          borderRadius: BorderRadius.circular(28),
+                          border: Border.all(color: const Color(0xFFFFB800), width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFFFB800).withOpacity(0.12),
+                              blurRadius: 20,
+                              spreadRadius: 2,
                             ),
                           ],
                         ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(26),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              buildTaxiBorderHeader(),
+                              const SizedBox(height: 25),
+                              
+                              // Logo Alanı
+                              Container(
+                                width: 100,
+                                height: 100,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.white,
+                                  border: Border.all(color: const Color(0xFFFFB800), width: 3),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.3),
+                                      blurRadius: 10,
+                                    )
+                                  ]
+                                ),
+                                child: Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: const [
+                                      Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 38),
+                                      SizedBox(height: 2),
+                                      Text(
+                                        "تكسي البلد",
+                                        style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 13),
+                                      ),
+                                      Text(
+                                        "TAXI AL BALAD",
+                                        style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 7),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              
+                              const SizedBox(height: 18),
+                              const Text(
+                                "تكسي البلد | كابتن",
+                                style: TextStyle(
+                                  color: Color(0xFFFFB800),
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                "بوابة تسجيل دخول السائقين",
+                                style: TextStyle(color: Colors.grey, fontSize: 14),
+                              ),
+                              const SizedBox(height: 25),
+
+                              // Form Alanı
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 22),
+                                child: isOnline
+                                    ? Column(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(16),
+                                            decoration: BoxDecoration(
+                                              color: Colors.green.withOpacity(0.1),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(Icons.check_circle, color: Color(0xFF2ECC71), size: 75),
+                                          ),
+                                          const SizedBox(height: 18),
+                                          Text(
+                                            "مرحباً بك كابتن $driverName",
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                                          ),
+                                          const SizedBox(height: 10),
+                                          const Text(
+                                            "أنت الآن متصل وتطبيقك يرسل إحداثيات الموقع مباشرة للوحة التحكم حتى عند قفل الشاشة",
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.4),
+                                          ),
+                                          const SizedBox(height: 30),
+                                          ElevatedButton(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(0xFFE74C3C),
+                                              minimumSize: const Size.fromHeight(55),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                              elevation: 4,
+                                            ),
+                                            onPressed: () {
+                                              FlutterBackgroundService().invoke('stopService');
+                                              setState(() => isOnline = false);
+                                            },
+                                            child: const Text(
+                                              "إيقاف الاستقبال والعمل",
+                                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : Column(
+                                        crossAxisAlignment: CrossAxisAlignment.end,
+                                        children: [
+                                          const Text("رقم الهاتف", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                          const SizedBox(height: 8),
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.white,
+                                              borderRadius: BorderRadius.circular(14),
+                                            ),
+                                            child: TextField(
+                                              controller: _phone,
+                                              keyboardType: TextInputType.phone,
+                                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
+                                              decoration: const InputDecoration(
+                                                border: InputBorder.none,
+                                                prefixIcon: Padding(
+                                                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                                  child: Text("+963", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 17)),
+                                                ),
+                                                hintText: "962750014",
+                                                hintStyle: TextStyle(color: Colors.black26),
+                                                contentPadding: EdgeInsets.symmetric(vertical: 14),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 18),
+                                          const Text("رمز المرور (PIN)", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                          const SizedBox(height: 8),
+                                          Container(
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF2C2C2E),
+                                              borderRadius: BorderRadius.circular(14),
+                                              border: Border.all(color: Colors.white12),
+                                            ),
+                                            child: TextField(
+                                              controller: _pass,
+                                              obscureText: true,
+                                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                              decoration: const InputDecoration(
+                                                border: InputBorder.none,
+                                                suffixIcon: Icon(Icons.lock, color: Color(0xFFFFB800)),
+                                                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                                hintText: "••••",
+                                                hintStyle: TextStyle(color: Colors.white24),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 25),
+                                          ElevatedButton(
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: const Color(0xFFFFB800),
+                                              minimumSize: const Size.fromHeight(55),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                              elevation: 5,
+                                            ),
+                                            onPressed: isLoading ? null : handleLogin,
+                                            child: isLoading
+                                                ? const CircularProgressIndicator(color: Colors.black)
+                                                : Row(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: const [
+                                                      Text("تسجيل الدخول", style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w900)),
+                                                      SizedBox(width: 8),
+                                                      Icon(Icons.login, color: Colors.black),
+                                                    ],
+                                                  ),
+                                          ),
+                                        ],
+                                      ),
+                              ),
+                              const SizedBox(height: 30),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               );
             }
@@ -327,5 +498,3 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
-
-
