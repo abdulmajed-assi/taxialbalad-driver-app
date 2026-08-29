@@ -87,10 +87,11 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Tam Uyumlu Orijinal Tasarım & Arka Plan GPS Kodu
+          # 6. Orijinal Logo + Kesintisiz GPS Kodları (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
+          import 'dart:typed_data';
           import 'package:flutter/material.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
@@ -98,6 +99,9 @@ jobs:
           import 'package:wakelock_plus/wakelock_plus.dart';
 
           const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
+
+          // Orijinal Logo (Base64)
+          const String LOGO_BASE64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/4gIYSUNDX1BST0ZJTEUAAQEAAAIIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAAHRyWFlaAAABZAAAABRnWFlaAAABeAAAABRiWFlaAAABjAAAABRyVFJDAAABoAAAAChnVFJDAAABoAAAAChiVFJDAAABoAAAACh3dHB0AAAByAAAABRjcHJ0AAAB3AAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAFgAAAAcAHMAUgBHAEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFhZWiAAAAAAAABvogAAOPUAAAOQWFlaIAAAAAAAAGKZAAC3hQAAGNpYWVogAAAAAAAAJKAAAA+EAAC2z3BhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABYWVogAAAAAAAA9tYAAQAAAADTLW1sdWMAAAAAAAAAAQAAAAxlblVTAAAAIAAAABwARwBvAG8AZwBsAGUAIABJAG4AYwAuACAAMgAwADEANv/bAEMABAMDAwMDBAMDBAYEA4OIBwcHBwcICwkKCQsJDBAMDAwMDAwQDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/bAEMBBAQEBwcHDAcHDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/AABEIAJsAmgMBIgACEQEDEQH/xAAZAAEBAQEBAQAAAAAAAAAAAAAAAgEDBAb/xAAjEAACAgEEAwEBAQEAAAAAAAAAAQIRAxIhMUFRcQSBgWET/8QAFwEBAQEBAAAAAAAAAAAAAAAAAAECA//EABwRAQEBAAMBAQEAAAAAAAAAAAARASExAiJBYf/aAAwDAQACEQMRAD8A/sPj0Zt5N41Q26fA+Fh530vHkbb/AJyNv+cDfovb7Nq8mzcvL4Hj55Hj55G3TL2+zNq8vhjbr+cG7dceQ345C528/jM28/jM398eQtvfkbl6X+Taq755G3X85G3TyG/T7M27zvyNv+cDf0/5yNuqeQ36r79M2ry/jG1+XwbV5/A36/nJm1eXwNuuvI2665G3/ORt5f7wG/T/nJm3l/g2665G3TyG7en2ZtXl8Dbp/A36/nI36f84NuquzNv+cG1eXwb9P4G7en2Zu3l8Dbp8Dfqu/Q3bv8AGZu3l8DbryG/T7M3by/wbb+fwb9V3yNuufA3b0v8m7VfPI28vnkPj55C528/jNu3nkNu/wA5G3TyG3X4bV5/DO/fnkbdfjkNu3l8Dbp5G/TyG/TyNuq75D4+eQ+PnkNuufw2ry+Bu1fyNuunkbddPkb9P4G3TyNuuuQNuvwbb/nJm3T4G3f4G3TyG3X85G3TyG3TyG3TyG3TyNuuuRv08h8fPI26eQ36eRv0/gbdVeQNun8DbrrkbdPI26eRv0/gbdP4G3TyNuuuRv08jfpyH/9k=";
 
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
@@ -125,13 +129,21 @@ jobs:
             int remainingDays = 7;
             String expiryDate = "5/9/2026";
             String activeKey = "";
+            String liveGpsText = "GPS نشط (جاري التحديد...)";
             StreamSubscription<Position>? _positionStream;
             Timer? _locationTimer;
+
+            late final Uint8List logoBytes;
 
             @override
             void initState() {
               super.initState();
               WidgetsBinding.instance.addObserver(this);
+              try {
+                logoBytes = base64Decode(LOGO_BASE64);
+              } catch (_) {
+                logoBytes = Uint8List(0);
+              }
             }
 
             @override
@@ -177,11 +189,18 @@ jobs:
                   Uri.parse("$FIREBASE_URL/$activeKey.json"),
                   body: json.encode(updateData),
                 );
+
+                if (mounted) {
+                  setState(() {
+                    liveGpsText = "GPS نشط ($driverCity)";
+                  });
+                }
               } catch (_) {}
             }
 
             Future<void> startTracking(String key) async {
               try {
+                // İzinler
                 await Permission.notification.request();
                 LocationPermission permission = await Geolocator.checkPermission();
                 if (permission == LocationPermission.denied) {
@@ -195,30 +214,22 @@ jobs:
                 await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                // İlk GPS Konumunu alıp hemen Online gönder
-                try {
-                  Position currentPos = await Geolocator.getCurrentPosition(
-                    desiredAccuracy: LocationAccuracy.bestForNavigation,
-                    timeLimit: const Duration(seconds: 4),
-                  );
-                  await sendLocationData(currentPos);
-                } catch (_) {
-                  // GPS gecikse bile hemen Firebase'e Online yaz
-                  await http.patch(
-                    Uri.parse("$FIREBASE_URL/$key.json"),
-                    body: json.encode({
-                      'status': 'available',
-                      'isOnline': true,
-                      'online': true,
-                      'active': true,
-                      'workingStatus': 'working',
-                    }),
-                  );
-                }
+                // 1. Doğrudan Anında Online Yap
+                await http.patch(
+                  Uri.parse("$FIREBASE_URL/$key.json"),
+                  body: json.encode({
+                    'status': 'available',
+                    'isOnline': true,
+                    'online': true,
+                    'active': true,
+                    'workingStatus': 'working',
+                    'lastActive': DateTime.now().millisecondsSinceEpoch,
+                  }),
+                );
 
-                // 1. Kanat: Stream tabanlı anlık GPS
+                // 2. Canlı GPS Stream
                 const LocationSettings locationSettings = LocationSettings(
-                  accuracy: LocationAccuracy.bestForNavigation,
+                  accuracy: LocationAccuracy.high,
                   distanceFilter: 0,
                 );
 
@@ -230,13 +241,12 @@ jobs:
                   onError: (err) {},
                 );
 
-                // 2. Kanat: Arka planda kalsa bile her 3 saniyede zorunlu Heartbeat
+                // 3. Kesintisiz Timer (Her 3 saniyede bir konumu güncelle)
                 _locationTimer?.cancel();
                 _locationTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
                   try {
                     Position p = await Geolocator.getCurrentPosition(
                       desiredAccuracy: LocationAccuracy.high,
-                      timeLimit: const Duration(seconds: 2),
                     );
                     await sendLocationData(p);
                   } catch (_) {}
@@ -366,84 +376,29 @@ jobs:
               );
             }
 
-            Widget buildOriginalLogo() {
+            Widget buildActualLogo() {
               return Container(
-                width: 104,
-                height: 104,
+                width: 106,
+                height: 106,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFECEFF1),
-                  border: Border.all(color: const Color(0xFFFFB800), width: 3.5),
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFFFFB800), width: 3),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.4),
                       blurRadius: 10,
-                      offset: const Offset(0, 4),
+                      offset: const Offset(0, 3),
                     )
                   ],
                 ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Üst Sarı Taksi ve Yay Çizgisi
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: 52,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              border: Border.all(color: const Color(0xFFFFB800), width: 2.5),
-                              borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-                            ),
-                          ),
-                          const Icon(Icons.local_taxi_rounded, color: Color(0xFFFFB800), size: 30),
-                        ],
-                      ),
-                      const SizedBox(height: 1),
-                      // تكسي البلد Başlığı
-                      const Text(
-                        "تكسي البلد",
-                        style: TextStyle(
-                          color: Color(0xFFE5A000),
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12,
-                          height: 1.1,
-                        ),
-                      ),
-                      // TAXI AL BALAD
-                      const Text(
-                        "TAXI AL BALAD",
-                        style: TextStyle(
-                          color: Colors.black87,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 6.5,
-                          letterSpacing: 0.4,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      // Sarı Telefon Hapı
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFB800),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Icon(Icons.phone, size: 6.5, color: Colors.black),
-                            SizedBox(width: 2),
-                            Text(
-                              "0962750014",
-                              style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 6.5),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                child: ClipOval(
+                  child: logoBytes.isNotEmpty
+                      ? Image.memory(
+                          logoBytes,
+                          fit: BoxFit.cover,
+                        )
+                      : const Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 48),
                 ),
               );
             }
@@ -469,11 +424,11 @@ jobs:
                             children: [
                               buildTaxiCheckerBorder(),
                               const SizedBox(height: 22),
-                              buildOriginalLogo(),
+                              buildActualLogo(),
                               const SizedBox(height: 18),
                               
                               if (!isOnline) ...[
-                                // GİRİŞ EKRANI (1:1 Orijinal)
+                                // GİRİŞ EKRANI (1:1 Orijinal Tema)
                                 const Text(
                                   "تكسي البلد | كابتن",
                                   style: TextStyle(
@@ -562,7 +517,7 @@ jobs:
                                   ),
                                 ),
                               ] else ...[
-                                // AKTİF SÜRÜCÜ EKRANI (1:1 Orijinal Tema)
+                                // SÜRÜCÜ PANELİ (1:1 Orijinal Tema)
                                 Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 18),
                                   child: Column(
@@ -636,13 +591,13 @@ jobs:
                                               ),
                                             ),
                                             const SizedBox(width: 8),
-                                            Text("GPS نشط ($driverCity)", style: const TextStyle(color: Color(0xFF60A5FA), fontWeight: FontWeight.bold, fontSize: 13)),
+                                            Text(liveGpsText, style: const TextStyle(color: Color(0xFF60A5FA), fontWeight: FontWeight.bold, fontSize: 13)),
                                           ],
                                         ),
                                       ),
                                       const SizedBox(height: 14),
 
-                                      // Abonelik Kalan Gün Kutusu
+                                      // Kalan Gün Kutusu
                                       Container(
                                         width: double.infinity,
                                         padding: const EdgeInsets.symmetric(vertical: 20),
@@ -685,7 +640,7 @@ jobs:
                                       ),
                                       const SizedBox(height: 14),
 
-                                      // Çıkış Yap Bağlantısı
+                                      // Çıkış Yap Butonu
                                       GestureDetector(
                                         onTap: handleLogout,
                                         child: Row(
@@ -722,6 +677,7 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
 
 
