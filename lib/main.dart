@@ -69,7 +69,7 @@ class _DriverAppState extends State<DriverApp> {
         autoStart: false,
         isForegroundMode: true,
         notificationChannelId: 'taxi_location_channel',
-        initialNotificationTitle: '🚖 كابتن تكسي البلد',
+        initialNotificationTitle: 'كابتن تكسي البلد',
         initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
         foregroundServiceTypes: [AndroidForegroundType.location],
       ),
