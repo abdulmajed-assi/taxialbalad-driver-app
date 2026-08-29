@@ -28,10 +28,10 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Kütüphaneleri ekle
-          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler wakelock_plus
+          # 1. Gerekli Paketler
+          flutter pub add geolocator http permission_handler wakelock_plus
 
-          # 2. JVM Bellek Ayarları
+          # 2. Gradle JVM ve AndroidX Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
@@ -40,24 +40,21 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # 4. SDK Sürümlerini ve Debug İmzasını Ayarla
+          # 4. SDK ve Debug İmzalama
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 5. Android Manifest (Arka Plan Servis & Lokasyon İzinleri)
+          # 5. Android Manifest (Arka Plan ve GPS İzinleri)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              xmlns:tools="http://schemas.android.com/tools"
               package="com.taxialbalad.driver_app">
               
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
               <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
@@ -83,14 +80,6 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
-                  
-                  <service
-                      android:name="id.flutter.flutter_background_service.BackgroundService"
-                      android:foregroundServiceType="location"
-                      android:enabled="true"
-                      android:exported="true"
-                      tools:replace="android:exported" />
-                  
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -98,13 +87,11 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Birebir Arayüz & Kesintisiz Arka Plan GPS Kodu (lib/main.dart)
+          # 6. Tam Uyumlu Orijinal Tasarım & Arka Plan GPS Kodu
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
-          import 'package:flutter_background_service/flutter_background_service.dart';
-          import 'package:flutter_background_service_android/flutter_background_service_android.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
@@ -112,71 +99,12 @@ jobs:
 
           const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
 
-          void main() async {
+          void main() {
             WidgetsFlutterBinding.ensureInitialized();
             runApp(const MaterialApp(
               home: DriverApp(),
               debugShowCheckedModeBanner: false,
             ));
-          }
-
-          @pragma('vm:entry-point')
-          void onStart(ServiceInstance service) async {
-            if (service is AndroidServiceInstance) {
-              service.on('setAsForeground').listen((event) {
-                service.setAsForegroundService();
-              });
-              service.on('setAsBackground').listen((event) {
-                service.setAsBackgroundService();
-              });
-            }
-
-            service.on('setDriver').listen((event) {
-              if (event != null && event['driverKey'] != null) {
-                String driverKey = event['driverKey'];
-                
-                // Arka planda kesintisiz her 3 saniyede bir GPS güncellemesi
-                Timer.periodic(const Duration(seconds: 3), (timer) async {
-                  try {
-                    bool enabled = await Geolocator.isLocationServiceEnabled();
-                    if (!enabled) return;
-
-                    Position pos = await Geolocator.getCurrentPosition(
-                      desiredAccuracy: LocationAccuracy.bestForNavigation,
-                      timeLimit: const Duration(seconds: 2),
-                    );
-
-                    int now = DateTime.now().millisecondsSinceEpoch;
-                    await http.patch(
-                      Uri.parse("$FIREBASE_URL/$driverKey.json"),
-                      body: json.encode({
-                        'lat': pos.latitude,
-                        'lng': pos.longitude,
-                        'latitude': pos.latitude,
-                        'longitude': pos.longitude,
-                        'speed': pos.speed > 0 ? pos.speed : 0.0,
-                        'heading': pos.heading,
-                        'bearing': pos.heading,
-                        'accuracy': pos.accuracy,
-                        'isMoving': pos.speed > 0.5,
-                        'status': 'available',
-                        'isOnline': true,
-                        'online': true,
-                        'active': true,
-                        'workingStatus': 'working',
-                        'lastGpsUpdate': now,
-                        'lastActive': now,
-                        'timestamp': now,
-                      }),
-                    );
-                  } catch (_) {}
-                });
-              }
-            });
-
-            service.on('stopService').listen((event) {
-              service.stopSelf();
-            });
           }
 
           class DriverApp extends StatefulWidget {
@@ -186,7 +114,7 @@ jobs:
             State<DriverApp> createState() => _DriverAppState();
           }
 
-          class _DriverAppState extends State<DriverApp> {
+          class _DriverAppState extends State<DriverApp> with WidgetsBindingObserver {
             final _phone = TextEditingController();
             final _pass = TextEditingController();
             bool isOnline = false;
@@ -197,50 +125,169 @@ jobs:
             int remainingDays = 7;
             String expiryDate = "5/9/2026";
             String activeKey = "";
+            StreamSubscription<Position>? _positionStream;
+            Timer? _locationTimer;
 
-            Future<void> startBackgroundTracking(String key) async {
-              await Permission.notification.request();
-              await Permission.location.request();
-              if (await Permission.location.isGranted) {
-                await Permission.locationAlways.request();
-              }
-              await Permission.ignoreBatteryOptimizations.request();
-              await WakelockPlus.enable();
-
-              final service = FlutterBackgroundService();
-              await service.configure(
-                androidConfiguration: AndroidConfiguration(
-                  onStart: onStart,
-                  autoStart: false,
-                  isForegroundMode: true,
-                  notificationChannelId: 'my_foreground',
-                  initialNotificationTitle: '🚖 كابتن تكسي البلد',
-                  initialNotificationContent: 'أنت متصل الآن وتستقبل طلبات الزبائن',
-                  foregroundServiceTypes: [AndroidForegroundType.location],
-                ),
-                iosConfiguration: IosConfiguration(),
-              );
-
-              await service.startService();
-              service.invoke('setDriver', {'driverKey': key});
+            @override
+            void initState() {
+              super.initState();
+              WidgetsBinding.instance.addObserver(this);
             }
 
-            Future<void> setOfflineOnFirebase(String key) async {
+            @override
+            void dispose() {
+              WidgetsBinding.instance.removeObserver(this);
+              _positionStream?.cancel();
+              _locationTimer?.cancel();
+              super.dispose();
+            }
+
+            @override
+            void didChangeAppLifecycleState(AppLifecycleState state) {
+              if (isOnline) {
+                WakelockPlus.enable();
+              }
+            }
+
+            Future<void> sendLocationData(Position pos) async {
+              if (activeKey.isEmpty) return;
               try {
                 int now = DateTime.now().millisecondsSinceEpoch;
+                Map<String, dynamic> updateData = {
+                  'lat': pos.latitude,
+                  'lng': pos.longitude,
+                  'latitude': pos.latitude,
+                  'longitude': pos.longitude,
+                  'speed': pos.speed > 0 ? pos.speed : 0.0,
+                  'heading': pos.heading,
+                  'bearing': pos.heading,
+                  'accuracy': pos.accuracy,
+                  'isMoving': pos.speed > 0.4,
+                  'status': 'available',
+                  'isOnline': true,
+                  'online': true,
+                  'active': true,
+                  'workingStatus': 'working',
+                  'lastGpsUpdate': now,
+                  'lastActive': now,
+                  'timestamp': now,
+                };
+
                 await http.patch(
-                  Uri.parse("$FIREBASE_URL/$key.json"),
-                  body: json.encode({
-                    'status': 'offline',
-                    'isOnline': false,
-                    'online': false,
-                    'active': false,
-                    'isMoving': false,
-                    'workingStatus': 'resting',
-                    'lastActive': now,
-                  }),
+                  Uri.parse("$FIREBASE_URL/$activeKey.json"),
+                  body: json.encode(updateData),
                 );
               } catch (_) {}
+            }
+
+            Future<void> startTracking(String key) async {
+              try {
+                await Permission.notification.request();
+                LocationPermission permission = await Geolocator.checkPermission();
+                if (permission == LocationPermission.denied) {
+                  permission = await Geolocator.requestPermission();
+                }
+                if (permission == LocationPermission.deniedForever) {
+                  await openAppSettings();
+                  return;
+                }
+
+                await WakelockPlus.enable();
+                await Permission.ignoreBatteryOptimizations.request();
+
+                // İlk GPS Konumunu alıp hemen Online gönder
+                try {
+                  Position currentPos = await Geolocator.getCurrentPosition(
+                    desiredAccuracy: LocationAccuracy.bestForNavigation,
+                    timeLimit: const Duration(seconds: 4),
+                  );
+                  await sendLocationData(currentPos);
+                } catch (_) {
+                  // GPS gecikse bile hemen Firebase'e Online yaz
+                  await http.patch(
+                    Uri.parse("$FIREBASE_URL/$key.json"),
+                    body: json.encode({
+                      'status': 'available',
+                      'isOnline': true,
+                      'online': true,
+                      'active': true,
+                      'workingStatus': 'working',
+                    }),
+                  );
+                }
+
+                // 1. Kanat: Stream tabanlı anlık GPS
+                const LocationSettings locationSettings = LocationSettings(
+                  accuracy: LocationAccuracy.bestForNavigation,
+                  distanceFilter: 0,
+                );
+
+                _positionStream?.cancel();
+                _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+                  (Position position) {
+                    sendLocationData(position);
+                  },
+                  onError: (err) {},
+                );
+
+                // 2. Kanat: Arka planda kalsa bile her 3 saniyede zorunlu Heartbeat
+                _locationTimer?.cancel();
+                _locationTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+                  try {
+                    Position p = await Geolocator.getCurrentPosition(
+                      desiredAccuracy: LocationAccuracy.high,
+                      timeLimit: const Duration(seconds: 2),
+                    );
+                    await sendLocationData(p);
+                  } catch (_) {}
+                });
+
+                if (mounted) {
+                  setState(() {
+                    isOnline = true;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: $e")));
+                }
+              }
+            }
+
+            void handlePause() async {
+              _positionStream?.cancel();
+              _positionStream = null;
+              _locationTimer?.cancel();
+              _locationTimer = null;
+              WakelockPlus.disable();
+
+              if (activeKey.isNotEmpty) {
+                try {
+                  int now = DateTime.now().millisecondsSinceEpoch;
+                  await http.patch(
+                    Uri.parse("$FIREBASE_URL/$activeKey.json"),
+                    body: json.encode({
+                      'status': 'offline',
+                      'isOnline': false,
+                      'online': false,
+                      'active': false,
+                      'isMoving': false,
+                      'workingStatus': 'resting',
+                      'lastActive': now,
+                    }),
+                  );
+                } catch (_) {}
+              }
+
+              setState(() {
+                isOnline = false;
+              });
+            }
+
+            void handleLogout() {
+              handlePause();
+              _phone.clear();
+              _pass.clear();
             }
 
             void handleLogin() async {
@@ -279,16 +326,12 @@ jobs:
                   if (matchKey != null && matchData != null) {
                     activeKey = matchKey!;
                     driverName = matchData!['name'] ?? 'Ahmad';
-                    driverId = (matchData!['driverId'] ?? matchData!['carNumber'] ?? '12345').toString();
+                    driverId = (matchData!['driverId'] ?? matchData!['carNumber'] ?? matchData!['id'] ?? '12345').toString();
                     driverCity = matchData!['city'] ?? 'اللاذقية';
-                    
-                    await startBackgroundTracking(activeKey);
+                    remainingDays = matchData!['remainingDays'] ?? 7;
+                    expiryDate = matchData!['expiryDate'] ?? '5/9/2026';
 
-                    if (mounted) {
-                      setState(() {
-                        isOnline = true;
-                      });
-                    }
+                    await startTracking(activeKey);
                   } else {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -310,23 +353,6 @@ jobs:
               }
             }
 
-            void handlePause() async {
-              FlutterBackgroundService().invoke('stopService');
-              WakelockPlus.disable();
-              if (activeKey.isNotEmpty) {
-                await setOfflineOnFirebase(activeKey);
-              }
-              setState(() {
-                isOnline = false;
-              });
-            }
-
-            void handleLogout() async {
-              handlePause();
-              _phone.clear();
-              _pass.clear();
-            }
-
             Widget buildTaxiCheckerBorder() {
               return SizedBox(
                 height: 12,
@@ -340,18 +366,19 @@ jobs:
               );
             }
 
-            Widget buildLogoCircle() {
+            Widget buildOriginalLogo() {
               return Container(
-                width: 86,
-                height: 86,
+                width: 104,
+                height: 104,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFF3F4F6),
-                  border: Border.all(color: const Color(0xFFFFB800), width: 3),
+                  color: const Color(0xFFECEFF1),
+                  border: Border.all(color: const Color(0xFFFFB800), width: 3.5),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.4),
                       blurRadius: 10,
+                      offset: const Offset(0, 4),
                     )
                   ],
                 ),
@@ -359,27 +386,62 @@ jobs:
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.local_taxi_rounded, color: Color(0xFFFFB800), size: 32),
+                      // Üst Sarı Taksi ve Yay Çizgisi
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Container(
+                            width: 52,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: const Color(0xFFFFB800), width: 2.5),
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+                            ),
+                          ),
+                          const Icon(Icons.local_taxi_rounded, color: Color(0xFFFFB800), size: 30),
+                        ],
+                      ),
                       const SizedBox(height: 1),
+                      // تكسي البلد Başlığı
                       const Text(
                         "تكسي البلد",
-                        style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
+                        style: TextStyle(
+                          color: Color(0xFFE5A000),
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          height: 1.1,
+                        ),
                       ),
+                      // TAXI AL BALAD
                       const Text(
                         "TAXI AL BALAD",
-                        style: TextStyle(color: Color(0xFFFFB800), fontWeight: FontWeight.w900, fontSize: 6.5, letterSpacing: 0.5),
+                        style: TextStyle(
+                          color: Colors.black87,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 6.5,
+                          letterSpacing: 0.4,
+                        ),
                       ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Icon(Icons.phone, size: 6, color: Colors.black),
-                          SizedBox(width: 2),
-                          Text(
-                            "0962750014",
-                            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 6.5),
-                          ),
-                        ],
-                      )
+                      const SizedBox(height: 2),
+                      // Sarı Telefon Hapı
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFB800),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            Icon(Icons.phone, size: 6.5, color: Colors.black),
+                            SizedBox(width: 2),
+                            Text(
+                              "0962750014",
+                              style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 6.5),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -389,14 +451,14 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                backgroundColor: const Color(0xFF121212),
+                backgroundColor: const Color(0xFF101010),
                 body: SafeArea(
                   child: Center(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1E1E1E),
+                          color: const Color(0xFF1C1C1E),
                           borderRadius: BorderRadius.circular(32),
                           border: Border.all(color: const Color(0xFFFFB800), width: 1.5),
                         ),
@@ -407,23 +469,23 @@ jobs:
                             children: [
                               buildTaxiCheckerBorder(),
                               const SizedBox(height: 22),
-                              buildLogoCircle(),
-                              const SizedBox(height: 16),
+                              buildOriginalLogo(),
+                              const SizedBox(height: 18),
                               
                               if (!isOnline) ...[
-                                // GİRİŞ EKRANI
+                                // GİRİŞ EKRANI (1:1 Orijinal)
                                 const Text(
                                   "تكسي البلد | كابتن",
                                   style: TextStyle(
                                     color: Color(0xFFFFB800),
-                                    fontSize: 22,
+                                    fontSize: 23,
                                     fontWeight: FontWeight.w900,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
                                 const Text(
                                   "بوابة تسجيل دخول السائقين",
-                                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                                  style: TextStyle(color: Colors.white60, fontSize: 13),
                                 ),
                                 const SizedBox(height: 22),
                                 Padding(
@@ -431,7 +493,7 @@ jobs:
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
-                                      const Text("رقم الهاتف", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                      const Text("رقم الهاتف", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
                                       const SizedBox(height: 8),
                                       Container(
                                         decoration: BoxDecoration(
@@ -455,7 +517,7 @@ jobs:
                                         ),
                                       ),
                                       const SizedBox(height: 16),
-                                      const Text("رمز المرور (PIN)", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                      const Text("رمز المرور (PIN)", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
                                       const SizedBox(height: 8),
                                       Container(
                                         decoration: BoxDecoration(
@@ -660,6 +722,7 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
 
 
