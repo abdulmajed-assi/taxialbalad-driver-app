@@ -31,7 +31,8 @@ jobs:
           # 1. Kütüphaneleri ekle
           flutter pub add flutter_background_service:^5.0.5 flutter_background_service_android:^6.2.0 geolocator:^11.0.0 http:^1.2.0 permission_handler:^11.3.0
 
-          # 2. Android SDK Sürümlerini Ayarla (minSdk 21 / compileSdk 34)
+          # 2. Kotlin Sürümünü ve Gradle Ayarlarını Güncelle
+          sed -i "s/ext.kotlin_version = .*/ext.kotlin_version = '1.9.22'/g" android/build.gradle
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
@@ -301,4 +302,3 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
-
