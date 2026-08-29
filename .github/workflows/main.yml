@@ -28,10 +28,10 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Gerekli Paketler
+          # 1. Kütüphaneleri ekle
           flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
 
-          # 2. Gradle JVM ve AndroidX Ayarları
+          # 2. JVM Bellek Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
@@ -40,7 +40,7 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # 4. SDK ve Debug İmzalama
+          # 4. SDK Sürümlerini ve Debug İmzasını Ayarla
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
@@ -98,7 +98,7 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Çökmeyen, Kararlı Kod (lib/main.dart)
+          # 6. Düzeltilmiş Flutter Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -191,12 +191,10 @@ jobs:
                     onStart: onStart,
                     autoStart: false,
                     isForegroundMode: true,
-                    notificationChannelId: 'taxi_location_channel',
+                    notificationChannelId: 'my_foreground',
                     initialNotificationTitle: '🚖 كابتن تكسي البلد',
                     initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
                     foregroundServiceTypes: [AndroidForegroundType.location],
-                    notificationChannelName: 'Taxi Driver Channel',
-                    notificationChannelImportance: NotificationChannelImportance.LOW,
                   ),
                   iosConfiguration: IosConfiguration(),
                 );
@@ -502,5 +500,3 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
-
-
