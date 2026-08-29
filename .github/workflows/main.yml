@@ -36,13 +36,17 @@ jobs:
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # 3. SDK Sürümlerini ve Debug İmzasını Ayarla
+          # 3. Kotlin 1.9.22 Güncellemesi (settings.gradle & build.gradle)
+          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
+          sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
+
+          # 4. SDK Sürümlerini ve Debug İmzasını Ayarla
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 4. Android Manifest (Arka Plan ve GPS İzinleri)
+          # 5. Android Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
@@ -94,7 +98,7 @@ jobs:
           </manifest>
           EOF
 
-          # 5. Flutter Uygulama Kodu (lib/main.dart)
+          # 6. Flutter Kodları (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -315,7 +319,7 @@ jobs:
           }
           EOF
 
-          # 6. APK Derleme
+          # 7. APK Derleme
           flutter build apk --release
 
       - name: Upload APK
@@ -323,4 +327,5 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
