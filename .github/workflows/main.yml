@@ -28,10 +28,10 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Kütüphaneleri ekle (AAPT2 çakışması yapan flutter_local_notifications kaldırıldı)
+          # 1. Gerekli Paketler
           flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
 
-          # 2. JVM Bellek Ayarları
+          # 2. Gradle JVM ve AndroidX Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
@@ -40,7 +40,7 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # 4. SDK Sürümlerini ve Debug İmzasını Ayarla
+          # 4. SDK ve Debug İmzalama
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
@@ -98,7 +98,7 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Özel Tasarımlı Kod (lib/main.dart)
+          # 6. Çökmeyen, Kararlı Kod (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -134,20 +134,25 @@ jobs:
               if (event != null && event['driverKey'] != null) {
                 String driverKey = event['driverKey'];
                 
-                Geolocator.getPositionStream(
-                  locationSettings: const LocationSettings(
-                    accuracy: LocationAccuracy.high,
-                    distanceFilter: 2,
-                  ),
-                ).listen((Position pos) {
-                  http.patch(
-                    Uri.parse("$FIREBASE_URL/$driverKey.json"),
-                    body: json.encode({
-                      'lat': pos.latitude,
-                      'lng': pos.longitude,
-                      'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
-                    }),
-                  );
+                Timer.periodic(const Duration(seconds: 4), (timer) async {
+                  try {
+                    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+                    if (!serviceEnabled) return;
+
+                    Position pos = await Geolocator.getCurrentPosition(
+                      desiredAccuracy: LocationAccuracy.high,
+                      timeLimit: const Duration(seconds: 3),
+                    );
+
+                    await http.patch(
+                      Uri.parse("$FIREBASE_URL/$driverKey.json"),
+                      body: json.encode({
+                        'lat': pos.latitude,
+                        'lng': pos.longitude,
+                        'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
+                      }),
+                    );
+                  } catch (_) {}
                 });
               }
             });
@@ -186,10 +191,12 @@ jobs:
                     onStart: onStart,
                     autoStart: false,
                     isForegroundMode: true,
-                    notificationChannelId: 'my_foreground',
+                    notificationChannelId: 'taxi_location_channel',
                     initialNotificationTitle: '🚖 كابتن تكسي البلد',
                     initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
                     foregroundServiceTypes: [AndroidForegroundType.location],
+                    notificationChannelName: 'Taxi Driver Channel',
+                    notificationChannelImportance: NotificationChannelImportance.LOW,
                   ),
                   iosConfiguration: IosConfiguration(),
                 );
@@ -197,12 +204,16 @@ jobs:
                 await service.startService();
                 service.invoke('setDriver', {'driverKey': key});
 
-                setState(() {
-                  isOnline = true;
-                  driverName = name;
-                });
+                if (mounted) {
+                  setState(() {
+                    isOnline = true;
+                    driverName = name;
+                  });
+                }
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("فشل بدء الخدمة: $e")));
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: $e")));
+                }
               }
             }
 
@@ -242,17 +253,23 @@ jobs:
                   if (matchKey != null) {
                     await startTracking(matchKey!, matchName!);
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("رقم الهاتف أو رمز المرور غير صحيح")),
-                    );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("رقم الهاتف أو رمز المرور غير صحيح")),
+                      );
+                    }
                   }
                 }
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("حدث خطأ أثناء الاتصال: $e")),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text("فشل الاتصال: $e")),
+                  );
+                }
               } finally {
-                setState(() => isLoading = false);
+                if (mounted) {
+                  setState(() => isLoading = false);
+                }
               }
             }
 
@@ -485,4 +502,5 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
