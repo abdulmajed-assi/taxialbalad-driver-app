@@ -4,46 +4,44 @@ import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 
 const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await initializeService();
   runApp(const MaterialApp(
     home: DriverApp(),
     debugShowCheckedModeBanner: false,
   ));
 }
 
-Future<void> initializeService() async {
-  final service = FlutterBackgroundService();
-  await service.configure(
-    androidConfiguration: AndroidConfiguration(
-      onStart: onStart,
-      autoStart: false,
-      isForegroundMode: true,
-      notificationTitle: "تكسي البلد | كابتن",
-      notificationContent: "جاري تتبع الموقع في الخلفية بشكل مستمر",
-      initialNotificationTitle: "تكسي البلد",
-      initialNotificationContent: "جاري بدء الخدمة...",
-    ),
-    iosConfiguration: IosConfiguration(),
-  );
-}
-
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
-  Geolocator.getPositionStream(
-    locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 3,
-    ),
-  ).listen((Position pos) {
-    service.invoke('update_location', {
-      'lat': pos.latitude,
-      'lng': pos.longitude,
-    });
+  service.on('setDriver').listen((event) {
+    if (event != null && event['driverKey'] != null) {
+      String driverKey = event['driverKey'];
+      
+      Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 2,
+        ),
+      ).listen((Position pos) {
+        http.patch(
+          Uri.parse("$FIREBASE_URL/$driverKey.json"),
+          body: json.encode({
+            'lat': pos.latitude,
+            'lng': pos.longitude,
+            'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
+          }),
+        );
+      });
+    }
+  });
+
+  service.on('stopService').listen((event) {
+    service.stopSelf();
   });
 }
 
@@ -55,76 +53,76 @@ class DriverApp extends StatefulWidget {
 }
 
 class _DriverAppState extends State<DriverApp> {
-  final _phoneController = TextEditingController();
-  final _passController = TextEditingController();
-  bool isWorking = false;
-  String? driverFbKey;
+  final _phone = TextEditingController();
+  final _pass = TextEditingController();
+  bool isOnline = false;
   String driverName = "";
 
-  void loginAndStart() async {
-    String phone = _phoneController.text.trim();
-    String pass = _passController.text.trim();
+  Future<void> startTracking(String key, String name) async {
+    await Permission.notification.request();
+    await Permission.locationAlways.request();
 
-    if (phone.isEmpty || pass.isEmpty) return;
+    final service = FlutterBackgroundService();
+    await service.configure(
+      androidConfiguration: AndroidConfiguration(
+        onStart: onStart,
+        autoStart: false,
+        isForegroundMode: true,
+        notificationChannelId: 'taxi_location_channel',
+        initialNotificationTitle: '🚖 كابتن تكسي البلد',
+        initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
+        foregroundServiceTypes: [AndroidForegroundType.location],
+      ),
+      iosConfiguration: IosConfiguration(),
+    );
 
-    if (!phone.startsWith('963')) {
-      if (phone.startsWith('0')) phone = '963${phone.substring(1)}';
-      else phone = '963$phone';
-    }
+    await service.startService();
+    service.invoke('setDriver', {'driverKey': key});
+
+    setState(() {
+      isOnline = true;
+      driverName = name;
+    });
+  }
+
+  void handleLogin() async {
+    String p = _phone.text.trim().replaceAll(RegExp(r'[^0-9]'), '');
+    String pass = _pass.text.trim();
+    if (p.isEmpty || pass.isEmpty) return;
+
+    if (p.startsWith('0')) p = '963${p.substring(1)}';
+    else if (!p.startsWith('963')) p = '963$p';
 
     try {
       final res = await http.get(Uri.parse("$FIREBASE_URL.json"));
       if (res.statusCode == 200 && res.body != "null") {
-        final Map<String, dynamic> data = json.decode(res.body);
-        data.forEach((key, val) {
-          if (val['phone'] != null && val['phone'].toString().contains(phone)) {
-            if (val['password'].toString() == pass) {
-              driverFbKey = key;
-              driverName = val['name'] ?? 'كابتن';
+        Map data = json.decode(res.body);
+        String? matchKey;
+        String? matchName;
+
+        data.forEach((k, v) {
+          String cleanP = (v['phone'] ?? '').toString().replaceAll(RegExp(r'[^0-9]'), '');
+          if (cleanP.contains(p) || p.contains(cleanP)) {
+            if (v['password'].toString() == pass) {
+              matchKey = k;
+              matchName = v['name'] ?? 'كابتن';
             }
           }
         });
 
-        if (driverFbKey != null) {
-          LocationPermission permission = await Geolocator.requestPermission();
-          if (permission == LocationPermission.denied) {
-            permission = await Geolocator.requestPermission();
-          }
-
-          final service = FlutterBackgroundService();
-          await service.startService();
-
-          FlutterBackgroundService().on('update_location').listen((event) {
-            if (event != null && driverFbKey != null) {
-              http.patch(
-                Uri.parse("$FIREBASE_URL/$driverFbKey.json"),
-                body: json.encode({
-                  'lat': event['lat'],
-                  'lng': event['lng'],
-                  'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
-                }),
-              );
-            }
-          });
-
-          setState(() => isWorking = true);
+        if (matchKey != null) {
+          await startTracking(matchKey!, matchName!);
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("رقم الهاتف أو كلمة المرور غير صحيحة")),
+            const SnackBar(content: Text("رقم الهاتف أو الرمز غير صحيح")),
           );
         }
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("خطأ في الاتصال: $e")),
+        SnackBar(content: Text("خطأ: $e")),
       );
     }
-  }
-
-  void stopWork() async {
-    final service = FlutterBackgroundService();
-    service.invoke("stopService");
-    setState(() => isWorking = false);
   }
 
   @override
@@ -137,24 +135,25 @@ class _DriverAppState extends State<DriverApp> {
         foregroundColor: Colors.black,
       ),
       body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: isWorking
+        padding: const EdgeInsets.all(24),
+        child: isOnline
             ? Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.check_circle_outline, color: Colors.green, size: 90),
-                    const SizedBox(height: 15),
-                    Text(
-                      "مرحباً بك كابتن $driverName\nأنت الآن أونلاين والموقع يرسل في الخلفية",
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 35),
+                    const Icon(Icons.check_circle, color: Colors.green, size: 90),
+                    const SizedBox(height: 20),
+                    Text("مرحباً بك كابتن $driverName", style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
+                    const Text("أنت الآن أونلاين والموقع يرسل في الخلفية حتى مع إغلاق الشاشة", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, fontSize: 15)),
+                    const SizedBox(height: 40),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size.fromHeight(50)),
-                      onPressed: stopWork,
-                      child: const Text("إيقاف العمل والخروج", style: TextStyle(fontSize: 18, color: Colors.white)),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size.fromHeight(55)),
+                      onPressed: () {
+                        FlutterBackgroundService().invoke('stopService');
+                        setState(() => isOnline = false);
+                      },
+                      child: const Text("إيقاف الاستقبال والعمل", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                     )
                   ],
                 ),
@@ -163,7 +162,7 @@ class _DriverAppState extends State<DriverApp> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   TextField(
-                    controller: _phoneController,
+                    controller: _phone,
                     keyboardType: TextInputType.phone,
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
@@ -171,29 +170,31 @@ class _DriverAppState extends State<DriverApp> {
                       labelStyle: TextStyle(color: Color(0xFFfcba03)),
                       prefixText: "+963 ",
                       prefixStyle: TextStyle(color: Colors.white),
-                      border: OutlineInputBorder(),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFfcba03))),
                     ),
                   ),
-                  const SizedBox(height: 15),
+                  const SizedBox(height: 16),
                   TextField(
-                    controller: _passController,
+                    controller: _pass,
                     obscureText: true,
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
-                      labelText: "كلمة المرور (PIN)",
+                      labelText: "رمز المرور (PIN)",
                       labelStyle: TextStyle(color: Color(0xFFfcba03)),
-                      border: OutlineInputBorder(),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFfcba03))),
                     ),
                   ),
                   const SizedBox(height: 25),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFfcba03),
-                      minimumSize: const Size.fromHeight(50),
+                      minimumSize: const Size.fromHeight(55),
                     ),
-                    onPressed: loginAndStart,
+                    onPressed: handleLogin,
                     child: const Text("تسجيل الدخول وبدء العمل", style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold)),
-                  )
+                  ),
                 ],
               ),
       ),
