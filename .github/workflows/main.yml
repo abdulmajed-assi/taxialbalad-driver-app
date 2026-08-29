@@ -24,13 +24,19 @@ jobs:
       - name: Create Full Working Project
         run: |
           rm -rf *
+          flutter config --no-analytics
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
           # 1. Kütüphaneleri ekle
           flutter pub add flutter_background_service:^5.0.5 flutter_background_service_android:^6.2.0 geolocator:^11.0.0 http:^1.2.0 permission_handler:^11.3.0
 
-          # 2. Android Manifest ve Arka Plan İzinleri (tools:replace eklendi)
+          # 2. Android SDK Sürümlerini Ayarla (minSdk 21 / compileSdk 34)
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
+          sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
+
+          # 3. Android Manifest ve Arka Plan İzinleri
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
@@ -80,7 +86,7 @@ jobs:
           </manifest>
           EOF
 
-          # 3. Flutter Uygulama Kodu
+          # 4. Flutter Uygulama Kodu
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -287,7 +293,7 @@ jobs:
           }
           EOF
 
-          # 4. APK Derlemesi
+          # 5. APK Derlemesi
           flutter build apk --release
 
       - name: Upload APK
@@ -295,3 +301,4 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
