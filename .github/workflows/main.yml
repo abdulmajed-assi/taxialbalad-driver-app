@@ -29,7 +29,7 @@ jobs:
           cd build_app
           
           # 1. Kütüphaneleri ekle
-          flutter pub add geolocator http permission_handler wakelock_plus
+          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler wakelock_plus
 
           # 2. JVM Bellek Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
@@ -46,16 +46,21 @@ jobs:
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 5. Android Manifest
+          # 5. Android Manifest (Arka Plan Servis & Lokasyon İzinleri)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools"
               package="com.taxialbalad.driver_app">
               
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
               
               <application
                   android:label="كابتن تكسي البلد"
@@ -78,6 +83,14 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
+                  
+                  <service
+                      android:name="id.flutter.flutter_background_service.BackgroundService"
+                      android:foregroundServiceType="location"
+                      android:enabled="true"
+                      android:exported="true"
+                      tools:replace="android:exported" />
+                  
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -85,11 +98,13 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Canlı Hareket & GPS Sinyal Kodu (lib/main.dart)
+          # 6. Birebir Arayüz & Kesintisiz Arka Plan GPS Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
+          import 'package:flutter_background_service/flutter_background_service.dart';
+          import 'package:flutter_background_service_android/flutter_background_service_android.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
@@ -97,12 +112,71 @@ jobs:
 
           const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
 
-          void main() {
+          void main() async {
             WidgetsFlutterBinding.ensureInitialized();
             runApp(const MaterialApp(
               home: DriverApp(),
               debugShowCheckedModeBanner: false,
             ));
+          }
+
+          @pragma('vm:entry-point')
+          void onStart(ServiceInstance service) async {
+            if (service is AndroidServiceInstance) {
+              service.on('setAsForeground').listen((event) {
+                service.setAsForegroundService();
+              });
+              service.on('setAsBackground').listen((event) {
+                service.setAsBackgroundService();
+              });
+            }
+
+            service.on('setDriver').listen((event) {
+              if (event != null && event['driverKey'] != null) {
+                String driverKey = event['driverKey'];
+                
+                // Arka planda kesintisiz her 3 saniyede bir GPS güncellemesi
+                Timer.periodic(const Duration(seconds: 3), (timer) async {
+                  try {
+                    bool enabled = await Geolocator.isLocationServiceEnabled();
+                    if (!enabled) return;
+
+                    Position pos = await Geolocator.getCurrentPosition(
+                      desiredAccuracy: LocationAccuracy.bestForNavigation,
+                      timeLimit: const Duration(seconds: 2),
+                    );
+
+                    int now = DateTime.now().millisecondsSinceEpoch;
+                    await http.patch(
+                      Uri.parse("$FIREBASE_URL/$driverKey.json"),
+                      body: json.encode({
+                        'lat': pos.latitude,
+                        'lng': pos.longitude,
+                        'latitude': pos.latitude,
+                        'longitude': pos.longitude,
+                        'speed': pos.speed > 0 ? pos.speed : 0.0,
+                        'heading': pos.heading,
+                        'bearing': pos.heading,
+                        'accuracy': pos.accuracy,
+                        'isMoving': pos.speed > 0.5,
+                        'status': 'available',
+                        'isOnline': true,
+                        'online': true,
+                        'active': true,
+                        'workingStatus': 'working',
+                        'lastGpsUpdate': now,
+                        'lastActive': now,
+                        'timestamp': now,
+                      }),
+                    );
+                  } catch (_) {}
+                });
+              }
+            });
+
+            service.on('stopService').listen((event) {
+              service.stopSelf();
+            });
           }
 
           class DriverApp extends StatefulWidget {
@@ -117,40 +191,41 @@ jobs:
             final _pass = TextEditingController();
             bool isOnline = false;
             bool isLoading = false;
-            String driverName = "";
+            String driverName = "Ahmad";
+            String driverId = "12345";
+            String driverCity = "اللاذقية";
+            int remainingDays = 7;
+            String expiryDate = "5/9/2026";
             String activeKey = "";
-            StreamSubscription<Position>? _positionStream;
-            Timer? _heartbeatTimer;
 
-            Future<void> sendDriverLocation(String key, Position pos) async {
-              try {
-                int now = DateTime.now().millisecondsSinceEpoch;
-                await http.patch(
-                  Uri.parse("$FIREBASE_URL/$key.json"),
-                  body: json.encode({
-                    'lat': pos.latitude,
-                    'lng': pos.longitude,
-                    'latitude': pos.latitude,
-                    'longitude': pos.longitude,
-                    'speed': pos.speed > 0 ? pos.speed : 0.0,
-                    'heading': pos.heading,
-                    'bearing': pos.heading,
-                    'accuracy': pos.accuracy,
-                    'isMoving': pos.speed > 0.5,
-                    'status': 'available',
-                    'isOnline': true,
-                    'online': true,
-                    'active': true,
-                    'workingStatus': 'working',
-                    'lastGpsUpdate': now,
-                    'lastActive': now,
-                    'timestamp': now,
-                  }),
-                );
-              } catch (_) {}
+            Future<void> startBackgroundTracking(String key) async {
+              await Permission.notification.request();
+              await Permission.location.request();
+              if (await Permission.location.isGranted) {
+                await Permission.locationAlways.request();
+              }
+              await Permission.ignoreBatteryOptimizations.request();
+              await WakelockPlus.enable();
+
+              final service = FlutterBackgroundService();
+              await service.configure(
+                androidConfiguration: AndroidConfiguration(
+                  onStart: onStart,
+                  autoStart: false,
+                  isForegroundMode: true,
+                  notificationChannelId: 'my_foreground',
+                  initialNotificationTitle: '🚖 كابتن تكسي البلد',
+                  initialNotificationContent: 'أنت متصل الآن وتستقبل طلبات الزبائن',
+                  foregroundServiceTypes: [AndroidForegroundType.location],
+                ),
+                iosConfiguration: IosConfiguration(),
+              );
+
+              await service.startService();
+              service.invoke('setDriver', {'driverKey': key});
             }
 
-            Future<void> updateDriverOffline(String key) async {
+            Future<void> setOfflineOnFirebase(String key) async {
               try {
                 int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
@@ -166,92 +241,6 @@ jobs:
                   }),
                 );
               } catch (_) {}
-            }
-
-            Future<void> startTracking(String key, String name) async {
-              try {
-                LocationPermission permission = await Geolocator.checkPermission();
-                if (permission == LocationPermission.denied) {
-                  permission = await Geolocator.requestPermission();
-                  if (permission == LocationPermission.denied) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("يرجى إعطاء إذن الوصول للموقع لتفعيل الخدمة")),
-                      );
-                    }
-                    return;
-                  }
-                }
-
-                if (permission == LocationPermission.deniedForever) {
-                  await openAppSettings();
-                  return;
-                }
-
-                await WakelockPlus.enable();
-                await Permission.ignoreBatteryOptimizations.request();
-
-                // İlk konum
-                try {
-                  Position initialPos = await Geolocator.getCurrentPosition(
-                    desiredAccuracy: LocationAccuracy.bestForNavigation,
-                    timeLimit: const Duration(seconds: 4),
-                  );
-                  await sendDriverLocation(key, initialPos);
-                } catch (_) {}
-
-                // Canlı GPS Dinleme (0 metre hassasiyet)
-                const LocationSettings locationSettings = LocationSettings(
-                  accuracy: LocationAccuracy.bestForNavigation,
-                  distanceFilter: 0,
-                );
-
-                _positionStream?.cancel();
-                _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-                  (Position position) {
-                    sendDriverLocation(key, position);
-                  },
-                  onError: (err) {},
-                );
-
-                // Periyodik Canlı Tutma Sinyali (Her 3 saniyede bir admin paneline canlı sinyal atar)
-                _heartbeatTimer?.cancel();
-                _heartbeatTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-                  try {
-                    Position currentPos = await Geolocator.getCurrentPosition(
-                      desiredAccuracy: LocationAccuracy.high,
-                      timeLimit: const Duration(seconds: 2),
-                    );
-                    await sendDriverLocation(key, currentPos);
-                  } catch (_) {}
-                });
-
-                if (mounted) {
-                  setState(() {
-                    isOnline = true;
-                    driverName = name;
-                    activeKey = key;
-                  });
-                }
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: $e")));
-                }
-              }
-            }
-
-            void stopTracking() async {
-              _positionStream?.cancel();
-              _positionStream = null;
-              _heartbeatTimer?.cancel();
-              _heartbeatTimer = null;
-              WakelockPlus.disable();
-              if (activeKey.isNotEmpty) {
-                await updateDriverOffline(activeKey);
-              }
-              setState(() {
-                isOnline = false;
-              });
             }
 
             void handleLogin() async {
@@ -275,20 +264,31 @@ jobs:
                 if (res.statusCode == 200 && res.body != "null") {
                   Map data = json.decode(res.body);
                   String? matchKey;
-                  String? matchName;
+                  Map? matchData;
 
                   data.forEach((k, v) {
                     String cleanP = (v['phone'] ?? '').toString().replaceAll(RegExp(r'[^0-9]'), '');
                     if (cleanP.contains(p) || p.contains(cleanP)) {
                       if (v['password'].toString() == pass) {
                         matchKey = k;
-                        matchName = v['name'] ?? 'كابتن';
+                        matchData = v;
                       }
                     }
                   });
 
-                  if (matchKey != null) {
-                    await startTracking(matchKey!, matchName!);
+                  if (matchKey != null && matchData != null) {
+                    activeKey = matchKey!;
+                    driverName = matchData!['name'] ?? 'Ahmad';
+                    driverId = (matchData!['driverId'] ?? matchData!['carNumber'] ?? '12345').toString();
+                    driverCity = matchData!['city'] ?? 'اللاذقية';
+                    
+                    await startBackgroundTracking(activeKey);
+
+                    if (mounted) {
+                      setState(() {
+                        isOnline = true;
+                      });
+                    }
                   } else {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -300,7 +300,7 @@ jobs:
               } catch (e) {
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("فشل الاتصال بالإنترنت: $e")),
+                    SnackBar(content: Text("فشل الاتصال: $e")),
                   );
                 }
               } finally {
@@ -310,11 +310,28 @@ jobs:
               }
             }
 
-            Widget buildTaxiBorderHeader() {
+            void handlePause() async {
+              FlutterBackgroundService().invoke('stopService');
+              WakelockPlus.disable();
+              if (activeKey.isNotEmpty) {
+                await setOfflineOnFirebase(activeKey);
+              }
+              setState(() {
+                isOnline = false;
+              });
+            }
+
+            void handleLogout() async {
+              handlePause();
+              _phone.clear();
+              _pass.clear();
+            }
+
+            Widget buildTaxiCheckerBorder() {
               return SizedBox(
-                height: 14,
+                height: 12,
                 child: Row(
-                  children: List.generate(18, (index) => Expanded(
+                  children: List.generate(24, (index) => Expanded(
                     child: Container(
                       color: index % 2 == 0 ? const Color(0xFFFFB800) : Colors.black,
                     ),
@@ -323,199 +340,306 @@ jobs:
               );
             }
 
+            Widget buildLogoCircle() {
+              return Container(
+                width: 86,
+                height: 86,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFF3F4F6),
+                  border: Border.all(color: const Color(0xFFFFB800), width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.4),
+                      blurRadius: 10,
+                    )
+                  ],
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.local_taxi_rounded, color: Color(0xFFFFB800), size: 32),
+                      const SizedBox(height: 1),
+                      const Text(
+                        "تكسي البلد",
+                        style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
+                      ),
+                      const Text(
+                        "TAXI AL BALAD",
+                        style: TextStyle(color: Color(0xFFFFB800), fontWeight: FontWeight.w900, fontSize: 6.5, letterSpacing: 0.5),
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Icon(Icons.phone, size: 6, color: Colors.black),
+                          SizedBox(width: 2),
+                          Text(
+                            "0962750014",
+                            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 6.5),
+                          ),
+                        ],
+                      )
+                    ],
+                  ),
+                ),
+              );
+            }
+
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                backgroundColor: const Color(0xFF141414),
+                backgroundColor: const Color(0xFF121212),
                 body: SafeArea(
                   child: Center(
                     child: SingleChildScrollView(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1C1C1E),
-                          borderRadius: BorderRadius.circular(28),
-                          border: Border.all(color: const Color(0xFFFFB800), width: 2),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFFFFB800).withOpacity(0.12),
-                              blurRadius: 20,
-                              spreadRadius: 2,
-                            ),
-                          ],
+                          color: const Color(0xFF1E1E1E),
+                          borderRadius: BorderRadius.circular(32),
+                          border: Border.all(color: const Color(0xFFFFB800), width: 1.5),
                         ),
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(26),
+                          borderRadius: BorderRadius.circular(30),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              buildTaxiBorderHeader(),
-                              const SizedBox(height: 25),
+                              buildTaxiCheckerBorder(),
+                              const SizedBox(height: 22),
+                              buildLogoCircle(),
+                              const SizedBox(height: 16),
                               
-                              // Logo Alanı
-                              Container(
-                                width: 100,
-                                height: 100,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.white,
-                                  border: Border.all(color: const Color(0xFFFFB800), width: 3),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.3),
-                                      blurRadius: 10,
-                                    )
-                                  ]
+                              if (!isOnline) ...[
+                                // GİRİŞ EKRANI
+                                const Text(
+                                  "تكسي البلد | كابتن",
+                                  style: TextStyle(
+                                    color: Color(0xFFFFB800),
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w900,
+                                  ),
                                 ),
-                                child: Center(
+                                const SizedBox(height: 4),
+                                const Text(
+                                  "بوابة تسجيل دخول السائقين",
+                                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                                ),
+                                const SizedBox(height: 22),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 20),
                                   child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: const [
-                                      Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 38),
-                                      SizedBox(height: 2),
-                                      Text(
-                                        "تكسي البلد",
-                                        style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 13),
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      const Text("رقم الهاتف", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: TextField(
+                                          controller: _phone,
+                                          keyboardType: TextInputType.phone,
+                                          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
+                                          decoration: const InputDecoration(
+                                            border: InputBorder.none,
+                                            prefixIcon: Padding(
+                                              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                              child: Text("+963", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 16)),
+                                            ),
+                                            hintText: "980040660",
+                                            hintStyle: TextStyle(color: Colors.black26),
+                                            contentPadding: EdgeInsets.symmetric(vertical: 13),
+                                          ),
+                                        ),
                                       ),
-                                      Text(
-                                        "TAXI AL BALAD",
-                                        style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 7),
+                                      const SizedBox(height: 16),
+                                      const Text("رمز المرور (PIN)", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF282828),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: Colors.white12),
+                                        ),
+                                        child: TextField(
+                                          controller: _pass,
+                                          obscureText: true,
+                                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                          decoration: const InputDecoration(
+                                            border: InputBorder.none,
+                                            suffixIcon: Icon(Icons.lock, color: Color(0xFFFFB800), size: 20),
+                                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                            hintText: "••••",
+                                            hintStyle: TextStyle(color: Colors.white24),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 22),
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFFFFB800),
+                                          minimumSize: const Size.fromHeight(50),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                          elevation: 4,
+                                        ),
+                                        onPressed: isLoading ? null : handleLogin,
+                                        child: isLoading
+                                            ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                                            : Row(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: const [
+                                                  Text("تسجيل الدخول", style: TextStyle(color: Colors.black, fontSize: 17, fontWeight: FontWeight.w900)),
+                                                  SizedBox(width: 8),
+                                                  Icon(Icons.login_rounded, color: Colors.black, size: 20),
+                                                ],
+                                              ),
                                       ),
                                     ],
                                   ),
                                 ),
-                              ),
-                              
-                              const SizedBox(height: 18),
-                              const Text(
-                                "تكسي البلد | كابتن",
-                                style: TextStyle(
-                                  color: Color(0xFFFFB800),
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              const Text(
-                                "بوابة تسجيل دخول السائقين",
-                                style: TextStyle(color: Colors.grey, fontSize: 14),
-                              ),
-                              const SizedBox(height: 25),
-
-                              // Form Alanı
-                              Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 22),
-                                child: isOnline
-                                    ? Column(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.all(16),
-                                            decoration: BoxDecoration(
-                                              color: Colors.green.withOpacity(0.1),
-                                              shape: BoxShape.circle,
+                              ] else ...[
+                                // AKTİF SÜRÜCÜ EKRANI (1:1 Orijinal Tema)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                                  child: Column(
+                                    children: [
+                                      // Sürücü Kartı
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF262628),
+                                          borderRadius: BorderRadius.circular(18),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            // Sol Yeşil Durum Butonu
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF1B3D2B),
+                                                borderRadius: BorderRadius.circular(14),
+                                                border: Border.all(color: const Color(0xFF2ECC71), width: 1.2),
+                                              ),
+                                              child: Column(
+                                                children: const [
+                                                  Text("متاح للعمل", style: TextStyle(color: Color(0xFF2ECC71), fontWeight: FontWeight.bold, fontSize: 13)),
+                                                  Text("(أونلاين)", style: TextStyle(color: Color(0xFF2ECC71), fontWeight: FontWeight.bold, fontSize: 12)),
+                                                ],
+                                              ),
                                             ),
-                                            child: const Icon(Icons.check_circle, color: Color(0xFF2ECC71), size: 75),
-                                          ),
-                                          const SizedBox(height: 18),
-                                          Text(
-                                            "مرحباً بك كابتن $driverName",
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                                          ),
-                                          const SizedBox(height: 10),
-                                          const Text(
-                                            "أنت الآن متصل وتطبيقك يرسل تحديثات الموقع المباشرة كل ثوانٍ إلى لوحة التحكم",
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.4),
-                                          ),
-                                          const SizedBox(height: 30),
-                                          ElevatedButton(
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: const Color(0xFFE74C3C),
-                                              minimumSize: const Size.fromHeight(55),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                              elevation: 4,
-                                            ),
-                                            onPressed: stopTracking,
-                                            child: const Text(
-                                              "إيقاف الاستقبال والعمل (استراحة)",
-                                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                                            ),
-                                          ),
-                                        ],
-                                      )
-                                    : Column(
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        children: [
-                                          const Text("رقم الهاتف", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
-                                          const SizedBox(height: 8),
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.white,
-                                              borderRadius: BorderRadius.circular(14),
-                                            ),
-                                            child: TextField(
-                                              controller: _phone,
-                                              keyboardType: TextInputType.phone,
-                                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
-                                              decoration: const InputDecoration(
-                                                border: InputBorder.none,
-                                                prefixIcon: Padding(
-                                                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                                                  child: Text("+963", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 17)),
+                                            // Sağ Sürücü Bilgisi
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.end,
+                                              children: [
+                                                const Text("كابتن", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                                                const SizedBox(height: 2),
+                                                Text(driverName, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900)),
+                                                const SizedBox(height: 4),
+                                                Row(
+                                                  children: [
+                                                    Text(driverId, style: const TextStyle(color: Color(0xFFFFB800), fontWeight: FontWeight.bold, fontSize: 13)),
+                                                    const SizedBox(width: 4),
+                                                    const Icon(Icons.location_on, color: Color(0xFFFFB800), size: 16),
+                                                  ],
                                                 ),
-                                                hintText: "962750014",
-                                                hintStyle: TextStyle(color: Colors.black26),
-                                                contentPadding: EdgeInsets.symmetric(vertical: 14),
-                                              ),
+                                                const SizedBox(height: 2),
+                                                Text(driverCity, style: const TextStyle(color: Color(0xFFFFB800), fontWeight: FontWeight.bold, fontSize: 12)),
+                                              ],
                                             ),
-                                          ),
-                                          const SizedBox(height: 18),
-                                          const Text("رمز المرور (PIN)", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
-                                          const SizedBox(height: 8),
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF2C2C2E),
-                                              borderRadius: BorderRadius.circular(14),
-                                              border: Border.all(color: Colors.white12),
-                                            ),
-                                            child: TextField(
-                                              controller: _pass,
-                                              obscureText: true,
-                                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                                              decoration: const InputDecoration(
-                                                border: InputBorder.none,
-                                                suffixIcon: Icon(Icons.lock, color: Color(0xFFFFB800)),
-                                                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                                hintText: "••••",
-                                                hintStyle: TextStyle(color: Colors.white24),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 25),
-                                          ElevatedButton(
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: const Color(0xFFFFB800),
-                                              minimumSize: const Size.fromHeight(55),
-                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                              elevation: 5,
-                                            ),
-                                            onPressed: isLoading ? null : handleLogin,
-                                            child: isLoading
-                                                ? const CircularProgressIndicator(color: Colors.black)
-                                                : Row(
-                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                    children: const [
-                                                      Text("تسجيل الدخول", style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w900)),
-                                                      SizedBox(width: 8),
-                                                      Icon(Icons.login, color: Colors.black),
-                                                    ],
-                                                  ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
-                              ),
-                              const SizedBox(height: 30),
+                                      const SizedBox(height: 14),
+
+                                      // Mavi GPS Butonu
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1E2D4A),
+                                          borderRadius: BorderRadius.circular(22),
+                                          border: Border.all(color: const Color(0xFF3B82F6), width: 1),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Container(
+                                              width: 9,
+                                              height: 9,
+                                              decoration: const BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: Color(0xFF3B82F6),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text("GPS نشط ($driverCity)", style: const TextStyle(color: Color(0xFF60A5FA), fontWeight: FontWeight.bold, fontSize: 13)),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 14),
+
+                                      // Abonelik Kalan Gün Kutusu
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(vertical: 20),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1E1E1E),
+                                          borderRadius: BorderRadius.circular(18),
+                                          border: Border.all(color: Colors.white12),
+                                        ),
+                                        child: Column(
+                                          children: [
+                                            const Text("الأيام المتبقية في اشتراكك", style: TextStyle(color: Colors.white70, fontSize: 15, fontWeight: FontWeight.w600)),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              "$remainingDays",
+                                              style: const TextStyle(color: Color(0xFFFFB800), fontSize: 48, fontWeight: FontWeight.w900),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text("ينتهي في: $expiryDate", style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 18),
+
+                                      // Kırmızı İstirahat Butonu
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFFDC2626),
+                                          minimumSize: const Size.fromHeight(52),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                        ),
+                                        onPressed: handlePause,
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: const [
+                                            Icon(Icons.pause, color: Colors.white, size: 22),
+                                            SizedBox(width: 6),
+                                            Text("أخذ استراحة (إيقاف الاستقبال)", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 14),
+
+                                      // Çıkış Yap Bağlantısı
+                                      GestureDetector(
+                                        onTap: handleLogout,
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: const [
+                                            Icon(Icons.logout_rounded, color: Colors.grey, size: 18),
+                                            SizedBox(width: 6),
+                                            Text("تسجيل الخروج", style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 24),
                             ],
                           ),
                         ),
@@ -536,5 +660,6 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
 
