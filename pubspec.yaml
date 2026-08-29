@@ -21,14 +21,16 @@ jobs:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      - name: Setup Project & Clean Code
+      - name: Build Standalone Background App
         run: |
           rm -rf *
           flutter create --org com.taxialbalad --project-name driver_app app_dir
           cd app_dir
+          
+          # Bağımlılıkları ekle
           flutter pub add flutter_background_service geolocator http permission_handler
 
-          # Manifest Ayarları
+          # Android Manifest İzinleri
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -76,7 +78,7 @@ jobs:
           </manifest>
           EOF
 
-          # Hatasız Main Kodu
+          # Flutter Kaynak Kodu (Hatadan arındırılmış)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -282,15 +284,13 @@ jobs:
             }
           }
           EOF
-
-      - name: Build Standalone APK
-        run: |
-          cd app_dir
+          
           flutter build apk --release
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: driver-apk
           path: app_dir/build/app/outputs/flutter-apk/app-release.apk
+
 
