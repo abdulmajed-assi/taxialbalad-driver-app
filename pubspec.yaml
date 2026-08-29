@@ -1,4 +1,4 @@
-name: Build Driver Background APK
+name: Build Driver APK
 
 on:
   push:
@@ -21,19 +21,17 @@ jobs:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      - name: Create Native Flutter Background App
+      - name: Setup Project & Clean Code
         run: |
-          rm -rf driver_project
-          flutter create --org com.taxialbalad --project-name driver_tracker driver_project
-          cd driver_project
-          
-          # Paketleri ekle
-          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
+          rm -rf *
+          flutter create --org com.taxialbalad --project-name driver_app app_dir
+          cd app_dir
+          flutter pub add flutter_background_service geolocator http permission_handler
 
           # Manifest Ayarları
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.taxialbalad.driver_tracker">
+              package="com.taxialbalad.driver_app">
               
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
@@ -58,8 +56,7 @@ jobs:
                       android:windowSoftInputMode="adjustResize">
                       <meta-data
                         android:name="io.flutter.embedding.android.NormalTheme"
-                        android:resource="@style/NormalTheme"
-                        />
+                        android:resource="@style/NormalTheme" />
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
@@ -79,7 +76,7 @@ jobs:
           </manifest>
           EOF
 
-          # Flutter Kodu
+          # Hatasız Main Kodu
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -288,11 +285,12 @@ jobs:
 
       - name: Build Standalone APK
         run: |
-          cd driver_project
+          cd app_dir
           flutter build apk --release
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: driver-apk
-          path: driver_project/build/app/outputs/flutter-apk/app-release.apk
+          path: app_dir/build/app/outputs/flutter-apk/app-release.apk
+
