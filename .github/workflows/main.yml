@@ -27,12 +27,13 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Gerekli kütüphaneleri ekle
+          # 1. Kütüphaneleri ekle
           flutter pub add flutter_background_service:^5.0.5 flutter_background_service_android:^6.2.0 geolocator:^11.0.0 http:^1.2.0 permission_handler:^11.3.0
 
-          # 2. Android Manifest ve Arka Plan İzinleri
+          # 2. Android Manifest ve Arka Plan İzinleri (tools:replace eklendi)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools"
               package="com.taxialbalad.driver_app">
               
               <uses-permission android:name="android.permission.INTERNET"/>
@@ -69,7 +70,8 @@ jobs:
                       android:name="id.flutter.flutter_background_service.BackgroundService"
                       android:foregroundServiceType="location"
                       android:enabled="true"
-                      android:exported="false"/>
+                      android:exported="true"
+                      tools:replace="android:exported" />
                   
                   <meta-data
                       android:name="flutterEmbedding"
