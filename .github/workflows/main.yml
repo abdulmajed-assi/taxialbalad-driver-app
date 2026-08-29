@@ -85,7 +85,7 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Sıfır Çökme & Kesintisiz Canlı Konum Kodu (lib/main.dart)
+          # 6. Admin Paneli ile Tam Uyumlu Kod (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -121,9 +121,45 @@ jobs:
             String activeKey = "";
             StreamSubscription<Position>? _positionStream;
 
+            Future<void> updateDriverOnline(String key, double lat, double lng) async {
+              try {
+                await http.patch(
+                  Uri.parse("$FIREBASE_URL/$key.json"),
+                  body: json.encode({
+                    'lat': lat,
+                    'lng': lng,
+                    'latitude': lat,
+                    'longitude': lng,
+                    'status': 'available',
+                    'isOnline': true,
+                    'online': true,
+                    'active': true,
+                    'workingStatus': 'working',
+                    'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
+                    'lastActive': DateTime.now().millisecondsSinceEpoch,
+                  }),
+                );
+              } catch (_) {}
+            }
+
+            Future<void> updateDriverOffline(String key) async {
+              try {
+                await http.patch(
+                  Uri.parse("$FIREBASE_URL/$key.json"),
+                  body: json.encode({
+                    'status': 'offline',
+                    'isOnline': false,
+                    'online': false,
+                    'active': false,
+                    'workingStatus': 'resting',
+                    'lastActive': DateTime.now().millisecondsSinceEpoch,
+                  }),
+                );
+              } catch (_) {}
+            }
+
             Future<void> startTracking(String key, String name) async {
               try {
-                // İzin kontrolleri
                 LocationPermission permission = await Geolocator.checkPermission();
                 if (permission == LocationPermission.denied) {
                   permission = await Geolocator.requestPermission();
@@ -142,11 +178,30 @@ jobs:
                   return;
                 }
 
-                // Ekran açık tutma & pil optimizasyonu
                 await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                // Konum akışını başlat
+                // İlk konum alıp anında Online yap
+                try {
+                  Position initialPos = await Geolocator.getCurrentPosition(
+                    desiredAccuracy: LocationAccuracy.high,
+                    timeLimit: const Duration(seconds: 5),
+                  );
+                  await updateDriverOnline(key, initialPos.latitude, initialPos.longitude);
+                } catch (_) {
+                  // İlk konum gecikirse bile direkt online yap
+                  await http.patch(
+                    Uri.parse("$FIREBASE_URL/$key.json"),
+                    body: json.encode({
+                      'status': 'available',
+                      'isOnline': true,
+                      'online': true,
+                      'active': true,
+                      'workingStatus': 'working',
+                    }),
+                  );
+                }
+
                 const LocationSettings locationSettings = LocationSettings(
                   accuracy: LocationAccuracy.high,
                   distanceFilter: 3,
@@ -155,14 +210,7 @@ jobs:
                 _positionStream?.cancel();
                 _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
                   (Position position) {
-                    http.patch(
-                      Uri.parse("$FIREBASE_URL/$key.json"),
-                      body: json.encode({
-                        'lat': position.latitude,
-                        'lng': position.longitude,
-                        'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
-                      }),
-                    );
+                    updateDriverOnline(key, position.latitude, position.longitude);
                   },
                   onError: (err) {},
                 );
@@ -181,10 +229,13 @@ jobs:
               }
             }
 
-            void stopTracking() {
+            void stopTracking() async {
               _positionStream?.cancel();
               _positionStream = null;
               WakelockPlus.disable();
+              if (activeKey.isNotEmpty) {
+                await updateDriverOffline(activeKey);
+              }
               setState(() {
                 isOnline = false;
               });
@@ -360,7 +411,7 @@ jobs:
                                           ),
                                           const SizedBox(height: 10),
                                           const Text(
-                                            "أنت الآن متصل وتطبيقك يرسل إحداثيات الموقع مباشرة للوحة التحكم ومتاح للزبائن",
+                                            "أنت الآن متصل ونشط على لوحة التحكم ومتاح لاستقبال طلبات الزبائن مباشرة",
                                             textAlign: TextAlign.center,
                                             style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.4),
                                           ),
@@ -374,7 +425,7 @@ jobs:
                                             ),
                                             onPressed: stopTracking,
                                             child: const Text(
-                                              "إيقاف الاستقبال والعمل",
+                                              "إيقاف الاستقبال والعمل (استراحة)",
                                               style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                                             ),
                                           ),
@@ -472,3 +523,4 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
