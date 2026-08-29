@@ -21,7 +21,7 @@ jobs:
           flutter-version: '3.24.5'
           channel: 'stable'
 
-      - name: Create Clean Robust Project
+      - name: Build Driver Application
         run: |
           rm -rf *
           flutter config --no-analytics
@@ -31,7 +31,40 @@ jobs:
           # 1. Kütüphaneleri ekle
           flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
 
-          # 2. Android Manifest ve Arka Plan İzinleri
+          # 2. Release Modunu Otomatik İmzalamaya Ayarla
+          sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
+
+          # 3. Kök build.gradle - Tüm alt eklentilere compileSdkVersion 34 zorlama
+          cat << 'EOF' > android/build.gradle
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+              afterEvaluate { project ->
+                  if (project.hasProperty("android")) {
+                      project.android {
+                          compileSdkVersion 34
+                          buildToolsVersion "34.0.0"
+                      }
+                  }
+              }
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
+          # 4. Android Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
@@ -45,11 +78,13 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
               
               <application
                   android:label="كابتن تكسي البلد"
                   android:name="${applicationName}"
-                  android:icon="@mipmap/ic_launcher">
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -81,12 +116,13 @@ jobs:
           </manifest>
           EOF
 
-          # 3. Flutter Uygulama Kodu
+          # 5. Flutter Uygulama Kodu
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
           import 'package:flutter_background_service/flutter_background_service.dart';
+          import 'package:flutter_background_service_android/flutter_background_service_android.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
@@ -103,6 +139,15 @@ jobs:
 
           @pragma('vm:entry-point')
           void onStart(ServiceInstance service) async {
+            if (service is AndroidServiceInstance) {
+              service.on('setAsForeground').listen((event) {
+                service.setAsForegroundService();
+              });
+              service.on('setAsBackground').listen((event) {
+                service.setAsBackgroundService();
+              });
+            }
+
             service.on('setDriver').listen((event) {
               if (event != null && event['driverKey'] != null) {
                 String driverKey = event['driverKey'];
@@ -145,7 +190,11 @@ jobs:
 
             Future<void> startTracking(String key, String name) async {
               await Permission.notification.request();
-              await Permission.locationAlways.request();
+              await Permission.location.request();
+              if (await Permission.location.isGranted) {
+                await Permission.locationAlways.request();
+              }
+              await Permission.ignoreBatteryOptimizations.request();
 
               final service = FlutterBackgroundService();
               await service.configure(
@@ -288,7 +337,7 @@ jobs:
           }
           EOF
 
-          # 4. APK Derleme
+          # 6. Derleme
           flutter build apk --release
 
       - name: Upload APK
