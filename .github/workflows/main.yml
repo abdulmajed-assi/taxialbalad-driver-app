@@ -1,4 +1,4 @@
- Build Driver Standalone APK
+name: Build Driver Standalone APK
 
 on:
   push:
@@ -323,3 +323,4 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
