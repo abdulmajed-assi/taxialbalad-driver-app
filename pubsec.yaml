@@ -1,0 +1,17 @@
+name: taxialbalad_driver
+description: Taxi Al Balad Captain App
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_background_service: ^5.0.0
+  geolocator: ^10.1.0
+  http: ^1.2.0
+
+flutter:
+  uses-material-design: true
