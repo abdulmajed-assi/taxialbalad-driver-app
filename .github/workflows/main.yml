@@ -29,7 +29,7 @@ jobs:
           cd build_app
           
           # 1. Kütüphaneleri ekle
-          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
+          flutter pub add geolocator http permission_handler wakelock_plus
 
           # 2. JVM Bellek Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
@@ -46,21 +46,16 @@ jobs:
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 5. Android Manifest
+          # 5. Android Manifest (Arka Plan ve GPS İzinleri)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              xmlns:tools="http://schemas.android.com/tools"
               package="com.taxialbalad.driver_app">
               
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
-              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
               
               <application
                   android:label="كابتن تكسي البلد"
@@ -83,14 +78,6 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
-                  
-                  <service
-                      android:name="id.flutter.flutter_background_service.BackgroundService"
-                      android:foregroundServiceType="location"
-                      android:enabled="true"
-                      android:exported="true"
-                      tools:replace="android:exported" />
-                  
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -98,68 +85,24 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Düzeltilmiş Flutter Kodu (lib/main.dart)
+          # 6. Sıfır Çökme & Kesintisiz Canlı Konum Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
-          import 'package:flutter_background_service/flutter_background_service.dart';
-          import 'package:flutter_background_service_android/flutter_background_service_android.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
+          import 'package:wakelock_plus/wakelock_plus.dart';
 
           const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
 
-          void main() async {
+          void main() {
             WidgetsFlutterBinding.ensureInitialized();
             runApp(const MaterialApp(
               home: DriverApp(),
               debugShowCheckedModeBanner: false,
             ));
-          }
-
-          @pragma('vm:entry-point')
-          void onStart(ServiceInstance service) async {
-            if (service is AndroidServiceInstance) {
-              service.on('setAsForeground').listen((event) {
-                service.setAsForegroundService();
-              });
-              service.on('setAsBackground').listen((event) {
-                service.setAsBackgroundService();
-              });
-            }
-
-            service.on('setDriver').listen((event) {
-              if (event != null && event['driverKey'] != null) {
-                String driverKey = event['driverKey'];
-                
-                Timer.periodic(const Duration(seconds: 4), (timer) async {
-                  try {
-                    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-                    if (!serviceEnabled) return;
-
-                    Position pos = await Geolocator.getCurrentPosition(
-                      desiredAccuracy: LocationAccuracy.high,
-                      timeLimit: const Duration(seconds: 3),
-                    );
-
-                    await http.patch(
-                      Uri.parse("$FIREBASE_URL/$driverKey.json"),
-                      body: json.encode({
-                        'lat': pos.latitude,
-                        'lng': pos.longitude,
-                        'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
-                      }),
-                    );
-                  } catch (_) {}
-                });
-              }
-            });
-
-            service.on('stopService').listen((event) {
-              service.stopSelf();
-            });
           }
 
           class DriverApp extends StatefulWidget {
@@ -175,37 +118,60 @@ jobs:
             bool isOnline = false;
             bool isLoading = false;
             String driverName = "";
+            String activeKey = "";
+            StreamSubscription<Position>? _positionStream;
 
             Future<void> startTracking(String key, String name) async {
               try {
-                await Permission.notification.request();
-                await Permission.location.request();
-                if (await Permission.location.isGranted) {
-                  await Permission.locationAlways.request();
+                // İzin kontrolleri
+                LocationPermission permission = await Geolocator.checkPermission();
+                if (permission == LocationPermission.denied) {
+                  permission = await Geolocator.requestPermission();
+                  if (permission == LocationPermission.denied) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("يرجى إعطاء إذن الوصول للموقع لتفعيل الخدمة")),
+                      );
+                    }
+                    return;
+                  }
                 }
+
+                if (permission == LocationPermission.deniedForever) {
+                  await openAppSettings();
+                  return;
+                }
+
+                // Ekran açık tutma & pil optimizasyonu
+                await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                final service = FlutterBackgroundService();
-                await service.configure(
-                  androidConfiguration: AndroidConfiguration(
-                    onStart: onStart,
-                    autoStart: false,
-                    isForegroundMode: true,
-                    notificationChannelId: 'my_foreground',
-                    initialNotificationTitle: '🚖 كابتن تكسي البلد',
-                    initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
-                    foregroundServiceTypes: [AndroidForegroundType.location],
-                  ),
-                  iosConfiguration: IosConfiguration(),
+                // Konum akışını başlat
+                const LocationSettings locationSettings = LocationSettings(
+                  accuracy: LocationAccuracy.high,
+                  distanceFilter: 3,
                 );
 
-                await service.startService();
-                service.invoke('setDriver', {'driverKey': key});
+                _positionStream?.cancel();
+                _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+                  (Position position) {
+                    http.patch(
+                      Uri.parse("$FIREBASE_URL/$key.json"),
+                      body: json.encode({
+                        'lat': position.latitude,
+                        'lng': position.longitude,
+                        'lastGpsUpdate': DateTime.now().millisecondsSinceEpoch,
+                      }),
+                    );
+                  },
+                  onError: (err) {},
+                );
 
                 if (mounted) {
                   setState(() {
                     isOnline = true;
                     driverName = name;
+                    activeKey = key;
                   });
                 }
               } catch (e) {
@@ -213,6 +179,15 @@ jobs:
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطأ: $e")));
                 }
               }
+            }
+
+            void stopTracking() {
+              _positionStream?.cancel();
+              _positionStream = null;
+              WakelockPlus.disable();
+              setState(() {
+                isOnline = false;
+              });
             }
 
             void handleLogin() async {
@@ -261,7 +236,7 @@ jobs:
               } catch (e) {
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("فشل الاتصال: $e")),
+                    SnackBar(content: Text("فشل الاتصال بالإنترنت: $e")),
                   );
                 }
               } finally {
@@ -385,7 +360,7 @@ jobs:
                                           ),
                                           const SizedBox(height: 10),
                                           const Text(
-                                            "أنت الآن متصل وتطبيقك يرسل إحداثيات الموقع مباشرة للوحة التحكم حتى عند قفل الشاشة",
+                                            "أنت الآن متصل وتطبيقك يرسل إحداثيات الموقع مباشرة للوحة التحكم ومتاح للزبائن",
                                             textAlign: TextAlign.center,
                                             style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.4),
                                           ),
@@ -397,10 +372,7 @@ jobs:
                                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                                               elevation: 4,
                                             ),
-                                            onPressed: () {
-                                              FlutterBackgroundService().invoke('stopService');
-                                              setState(() => isOnline = false);
-                                            },
+                                            onPressed: stopTracking,
                                             child: const Text(
                                               "إيقاف الاستقبال والعمل",
                                               style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
