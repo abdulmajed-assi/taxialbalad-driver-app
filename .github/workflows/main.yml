@@ -28,8 +28,8 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Kütüphaneleri ekle
-          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler flutter_local_notifications
+          # 1. Kütüphaneleri ekle (AAPT2 çakışması yapan flutter_local_notifications kaldırıldı)
+          flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
 
           # 2. JVM Bellek Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
@@ -98,14 +98,13 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Özel Tasarımlı ve Stabil Kod (lib/main.dart)
+          # 6. Özel Tasarımlı Kod (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'package:flutter/material.dart';
           import 'package:flutter_background_service/flutter_background_service.dart';
           import 'package:flutter_background_service_android/flutter_background_service_android.dart';
-          import 'package:flutter_local_notifications/flutter_local_notifications.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
@@ -181,25 +180,13 @@ jobs:
                 }
                 await Permission.ignoreBatteryOptimizations.request();
 
-                const AndroidNotificationChannel channel = AndroidNotificationChannel(
-                  'taxi_location_channel',
-                  'خدمة التتبع المباشر',
-                  description: 'تتبع موقع كابتن تكسي البلد في الخلفية',
-                  importance: Importance.low,
-                );
-
-                final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-                await flutterLocalNotificationsPlugin
-                    .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-                    ?.createNotificationChannel(channel);
-
                 final service = FlutterBackgroundService();
                 await service.configure(
                   androidConfiguration: AndroidConfiguration(
                     onStart: onStart,
                     autoStart: false,
                     isForegroundMode: true,
-                    notificationChannelId: 'taxi_location_channel',
+                    notificationChannelId: 'my_foreground',
                     initialNotificationTitle: '🚖 كابتن تكسي البلد',
                     initialNotificationContent: 'خدمة التتبع المباشر تعمل في الخلفية',
                     foregroundServiceTypes: [AndroidForegroundType.location],
@@ -498,3 +485,4 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
