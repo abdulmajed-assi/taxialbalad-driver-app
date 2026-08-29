@@ -16,7 +16,7 @@ jobs:
           channel: 'stable'
       
       - name: Generate Native Android Boilerplate
-        run: flutter create --org com.taxialbalad .
+        run: flutter create --org com.taxialbalad --project-name taxialbalad_driver .
 
       - name: Install Dependencies
         run: flutter pub get
