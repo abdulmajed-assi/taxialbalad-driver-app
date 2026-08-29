@@ -1,31 +1,41 @@
-name: Build Flutter APK
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.taxialbalad.taxialbalad_driver">
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.19.0'
-          channel: 'stable'
-      
-      - name: Generate Native Android Boilerplate
-        run: flutter create --org com.taxialbalad --project-name taxialbalad_driver .
+    <application
+        android:label="تكسي البلد كابتن"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
 
-      - name: Install Dependencies
-        run: flutter pub get
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+        
+        <service
+            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:foregroundServiceType="location"
+            android:enabled="true"
+            android:exported="true"/>
 
-      - name: Build APK
-        run: flutter build apk --release
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: driver-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
