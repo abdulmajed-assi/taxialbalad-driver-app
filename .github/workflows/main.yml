@@ -31,10 +31,12 @@ jobs:
           # 1. Kütüphaneleri ekle
           flutter pub add flutter_background_service flutter_background_service_android geolocator http permission_handler
 
-          # 2. Release Modunu Otomatik İmzalamaya Ayarla
-          sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
+          # 2. JVM Bellek & AndroidX Ayarları (Bellek Taşması Çözümü)
+          echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # 3. Kök build.gradle - Tüm alt eklentilere compileSdkVersion 34 zorlama
+          # 3. Kök build.gradle (Kotlin/AGP/compileSdk 34 Çözümü)
           cat << 'EOF' > android/build.gradle
           allprojects {
               repositories {
@@ -46,17 +48,25 @@ jobs:
           rootProject.buildDir = '../build'
           subprojects {
               project.buildDir = "${rootProject.buildDir}/${project.name}"
+              project.evaluationDependsOn(':app')
+          }
+
+          subprojects {
               afterEvaluate { project ->
-                  if (project.hasProperty("android")) {
+                  if (project.hasProperty('android')) {
                       project.android {
+                          if (namespace == null) {
+                              namespace project.group
+                          }
                           compileSdkVersion 34
                           buildToolsVersion "34.0.0"
+                          defaultConfig {
+                              minSdkVersion 21
+                              targetSdkVersion 34
+                          }
                       }
                   }
               }
-          }
-          subprojects {
-              project.evaluationDependsOn(':app')
           }
 
           tasks.register("clean", Delete) {
@@ -64,7 +74,10 @@ jobs:
           }
           EOF
 
-          # 4. Android Manifest
+          # 4. App build.gradle (İmzalama ve Optimizasyon Çözümü)
+          sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
+
+          # 5. Android Manifest (İzinler, tools:replace ve Background Service Çözümü)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools"
@@ -116,7 +129,7 @@ jobs:
           </manifest>
           EOF
 
-          # 5. Flutter Uygulama Kodu
+          # 6. Flutter Ana Kod (Sözdizimi ve API Parametre Çözümü)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -337,7 +350,7 @@ jobs:
           }
           EOF
 
-          # 6. Derleme
+          # 7. Derleme
           flutter build apk --release
 
       - name: Upload APK
