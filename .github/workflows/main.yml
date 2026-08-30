@@ -30,7 +30,7 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Assets ve Orijinal Logoyu Hazırla
+          # 1. Assets ve Logoyu Hazırla
           mkdir -p assets
           if [ -f "../logo.jpg" ]; then
             cp ../logo.jpg assets/logo.jpg
@@ -77,7 +77,8 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle
+          sed -i 's/minSdkVersion 21/minSdkVersion 23/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
@@ -759,4 +760,3 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
-
