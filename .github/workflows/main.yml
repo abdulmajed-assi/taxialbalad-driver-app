@@ -26,7 +26,7 @@ jobs:
 
       - name: Build Driver Application
         run: |
-          # 1. Depodaki logo.jpg dosyasını geçici alana kopyala
+          # 1. Logo Dosyasını Yedekle
           mkdir -p /tmp/taxi_assets
           if [ -f "logo.jpg" ]; then
             cp logo.jpg /tmp/taxi_assets/logo.jpg
@@ -34,21 +34,18 @@ jobs:
             cp logo.png /tmp/taxi_assets/logo.jpg
           fi
 
-          # 2. Temiz Flutter Projesi Oluştur
+          # 2. Temiz Flutter Projesi
           flutter config --no-analytics
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
-          
-          # 3. Paketleri Ekle
-          flutter pub add geolocator http permission_handler wakelock_plus flutter_foreground_task
 
-          # 4. Assets Klasörü ve Logoyu Taşı
+          # 3. Assets Klasörünü Oluştur ve Logoyu Ekle
           mkdir -p assets
           if [ -f "/tmp/taxi_assets/logo.jpg" ]; then
             cp /tmp/taxi_assets/logo.jpg assets/logo.jpg
           fi
 
-          # 5. pubspec.yaml Güncelle
+          # 4. pubspec.yaml (Doğru ve Uyumlu Versiyonlar)
           cat << 'EOF' > pubspec.yaml
           name: driver_app
           description: Taxi Al Balad Driver Standalone App
@@ -70,12 +67,13 @@ jobs:
               - assets/logo.jpg
           EOF
 
-          # 6. Gradle JVM ve AndroidX Ayarları
+          flutter pub get
+
+          # 5. Gradle ve Android Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # 7. Kotlin ve SDK Sürümleri
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
@@ -83,7 +81,7 @@ jobs:
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 8. Android Manifest (Arka Plan Servisi ve Bildirimler)
+          # 6. Android Manifest (Tam İzinler ve Servis Tanımı)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -96,7 +94,6 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
               <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-              
               <application
                   android:label="كابتن تكسي البلد"
                   android:name="${applicationName}"
@@ -105,7 +102,7 @@ jobs:
                   <service 
                       android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
                       android:foregroundServiceType="location"
-                      android:stopWithTask="false" />
+                      android:exported="false" />
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -129,7 +126,7 @@ jobs:
           </manifest>
           EOF
 
-          # 9. Tam Canlı Bildirimli ve GPS Döngülü Kod (lib/main.dart)
+          # 7. Dart Kaynak Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -315,7 +312,7 @@ jobs:
                   onError: (err) {},
                 );
 
-                // Periyodik Yedekleme Döngüsü (Her 2 saniyede bir zorunlu canlı sinyal)
+                // Periyodik Canlı Tutma Sinyali (Her 2 saniyede bir)
                 _locationTimer?.cancel();
                 _locationTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
                   try {
@@ -596,7 +593,6 @@ jobs:
                                   padding: const EdgeInsets.symmetric(horizontal: 18),
                                   child: Column(
                                     children: [
-                                      // Canlı Durum Başlık Bilgilendirmesi
                                       Container(
                                         width: double.infinity,
                                         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -619,7 +615,6 @@ jobs:
                                       ),
                                       const SizedBox(height: 12),
 
-                                      // Sürücü Kartı
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                                         decoration: BoxDecoration(
@@ -666,7 +661,6 @@ jobs:
                                       ),
                                       const SizedBox(height: 14),
 
-                                      // Mavi GPS Butonu
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                                         decoration: BoxDecoration(
@@ -692,7 +686,6 @@ jobs:
                                       ),
                                       const SizedBox(height: 14),
 
-                                      // Kalan Gün Kutusu
                                       Container(
                                         width: double.infinity,
                                         padding: const EdgeInsets.symmetric(vertical: 20),
@@ -716,7 +709,6 @@ jobs:
                                       ),
                                       const SizedBox(height: 18),
 
-                                      // Kırmızı İstirahat Butonu
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: const Color(0xFFDC2626),
@@ -735,7 +727,6 @@ jobs:
                                       ),
                                       const SizedBox(height: 14),
 
-                                      // Çıkış Yap Butonu
                                       GestureDetector(
                                         onTap: handleLogout,
                                         child: Row(
@@ -764,7 +755,7 @@ jobs:
           }
           EOF
 
-          # 10. APK Derleme
+          # 8. APK Derleme
           flutter build apk --release
 
       - name: Upload APK
@@ -772,9 +763,3 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
-
-
-
-
-
-
