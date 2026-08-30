@@ -26,26 +26,26 @@ jobs:
 
       - name: Build Driver Application
         run: |
-          # 1. Logo Dosyasını Yedekle
-          mkdir -p /tmp/taxi_assets
-          if [ -f "logo.jpg" ]; then
-            cp logo.jpg /tmp/taxi_assets/logo.jpg
-          elif [ -f "logo.png" ]; then
-            cp logo.png /tmp/taxi_assets/logo.jpg
-          fi
-
-          # 2. Temiz Flutter Projesi
           flutter config --no-analytics
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
-
-          # 3. Assets Klasörünü Oluştur ve Logoyu Ekle
+          
+          # 1. Assets ve Orijinal Logoyu Hazırla
           mkdir -p assets
-          if [ -f "/tmp/taxi_assets/logo.jpg" ]; then
-            cp /tmp/taxi_assets/logo.jpg assets/logo.jpg
+          if [ -f "../logo.jpg" ]; then
+            cp ../logo.jpg assets/logo.jpg
+          elif [ -f "../logo.png" ]; then
+            cp ../logo.png assets/logo.jpg
+          else
+            python3 -c '
+          import base64
+          raw = "/9j/4AAQSkZJRgABAQAAAQABAAD/4gIYSUNDX1BST0ZJTEUAAQEAAAIIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAAHRyWFlaAAABZAAAABRnWFlaAAABeAAAABRiWFlaAAABjAAAABRyVFJDAAABoAAAAChnVFJDAAABoAAAAChiVFJDAAABoAAAACh3dHB0AAAByAAAABRjcHJ0AAAB3AAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAFgAAAAcAHMAUgBHAEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFhZWiAAAAAAAABvogAAOPUAAAOQWFlaIAAAAAAAAGKZAAC3hQAAGNpYWVogAAAAAAAAJKAAAA+EAAC2z3BhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABYWVogAAAAAAAA9tYAAQAAAADTLW1sdWMAAAAAAAAAAQAAAAxlblVTAAAAIAAAABwARwBvAG8AZwBsAGUAIABJAG4AYwAuACAAMgAwADEANv/bAEMABAMDAwMDBAMDBAYEA4OIBwcHBwcICwkKCQsJDBAMDAwMDAwQDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/bAEMBBAQEBwcHDAcHDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/AABEIAJsAmgMBIgACEQEDEQH/xAAZAAEBAQEBAQAAAAAAAAAAAAAAAgEDBAb/xAAjEAACAgEEAwEBAQEAAAAAAAAAAQIRAxIhMUFRcQSBgWET/8QAFwEBAQEBAAAAAAAAAAAAAAAAAAECA//EABwRAQEBAAMBAQEAAAAAAAAAAAARASExAiJBYf/aAAwDAQACEQMRAD8A/sPj0Zt5N41Q26fA+Fh530vHkbb/AJyNv+cDfovb7Nq8mzcvL4Hj55Hj55G3TL2+zNq8vhjbr+cG7dceQ345C528/jM28/jM398eQtvfkbl6X+Taq755G3X85G3TyG/T7M27zvyNv+cDf0/5yNuqeQ36r79M2ry/jG1+XwbV5/A36/nJm1eXwNuuvI2665G3/ORt5f7wG/T/nJm3l/g2665G3TyG7en2ZtXl8Dbp/A36/nI36f84NuquzNv+cG1eXwb9P4G7en2Zu3l8Dbp8Dfqu/Q3bv8AGZu3l8DbryG/T7M3by/wbb+fwb9V3yNuufA3b0v8m7VfPI28vnkPj55C528/jNu3nkNu/wA5G3TyG3X4bV5/DO/fnkbdfjkNu3l8Dbp5G/TyG/TyNuq75D4+eQ+PnkNuufw2ry+Bu1fyNuunkbddPkb9P4G3TyNuuuQNuvwbb/nJm3T4G3f4G3TyG3X85G3TyG3TyG3TyG3TyNuuuRv08h8fPI26eQ36eRv0/gbdVeQNun8DbrrkbdPI26eRv0/gbdP4G3TyNuuuRv08jfpyH/9k="
+          with open("assets/logo.jpg", "wb") as f:
+              f.write(base64.b64decode(raw))
+          '
           fi
 
-          # 4. pubspec.yaml (Doğru ve Uyumlu Versiyonlar)
+          # 2. pubspec.yaml Tanımı
           cat << 'EOF' > pubspec.yaml
           name: driver_app
           description: Taxi Al Balad Driver Standalone App
@@ -60,7 +60,7 @@ jobs:
             http: ^1.2.0
             permission_handler: ^11.3.1
             wakelock_plus: ^1.2.8
-            flutter_foreground_task: ^8.18.0
+            flutter_foreground_task: ^7.0.1
           flutter:
             uses-material-design: true
             assets:
@@ -69,7 +69,7 @@ jobs:
 
           flutter pub get
 
-          # 5. Gradle ve Android Ayarları
+          # 3. Gradle JVM ve Android Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
@@ -81,7 +81,7 @@ jobs:
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 6. Android Manifest (Tam İzinler ve Servis Tanımı)
+          # 4. Android Manifest (Arka Plan Servisi ve İzinler)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -126,7 +126,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Dart Kaynak Kodu (lib/main.dart)
+          # 5. Flutter Uygulama Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -277,13 +277,11 @@ jobs:
                 await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                // Üst Bildirim Başlatma
                 await FlutterForegroundTask.startService(
                   notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
                   notificationText: 'جاري إرسال موقعك مباشرة إلى لوحة التحكم',
                 );
 
-                // İlk Online Ping
                 int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
                   Uri.parse("$FIREBASE_URL/$key.json"),
@@ -298,7 +296,6 @@ jobs:
                   }),
                 );
 
-                // Kesintisiz GPS Dinleme
                 const LocationSettings locationSettings = LocationSettings(
                   accuracy: LocationAccuracy.bestForNavigation,
                   distanceFilter: 0,
@@ -312,7 +309,6 @@ jobs:
                   onError: (err) {},
                 );
 
-                // Periyodik Canlı Tutma Sinyali (Her 2 saniyede bir)
                 _locationTimer?.cancel();
                 _locationTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
                   try {
@@ -755,7 +751,7 @@ jobs:
           }
           EOF
 
-          # 8. APK Derleme
+          # 6. APK Derleme
           flutter build apk --release
 
       - name: Upload APK
@@ -763,3 +759,4 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
