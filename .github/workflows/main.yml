@@ -30,7 +30,7 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Assets ve Logoyu Hazırla
+          # 1. Assets Klasörü ve Logo Güvencesi
           mkdir -p assets
           if [ -f "../logo.jpg" ]; then
             cp ../logo.jpg assets/logo.jpg
@@ -45,7 +45,7 @@ jobs:
           '
           fi
 
-          # 2. pubspec.yaml Tanımı
+          # 2. pubspec.yaml
           cat << 'EOF' > pubspec.yaml
           name: driver_app
           description: Taxi Al Balad Driver Standalone App
@@ -69,7 +69,7 @@ jobs:
 
           flutter pub get
 
-          # 3. Gradle JVM ve Android Ayarları
+          # 3. Gradle JVM Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
@@ -77,13 +77,58 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # Kesin SDK Güncellemesi (minSdkVersion 23, compileSdkVersion 34)
-          sed -i 's/compileSdkVersion .*/compileSdkVersion 34/g' android/app/build.gradle
-          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/g' android/app/build.gradle
-          sed -i 's/minSdkVersion .*/minSdkVersion 23/g' android/app/build.gradle
-          sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
+          # 4. ProGuard Kuralları (Release Çökmelerini Engeller)
+          cat << 'EOF' > android/app/proguard-rules.pro
+          -keep class com.pravera.flutter_foreground_task.** { *; }
+          -keep class com.baseflow.geolocator.** { *; }
+          -dontwarn okhttp3.**
+          -dontwarn okio.**
+          EOF
 
-          # 4. Android Manifest (Arka Plan Servisi ve İzinler)
+          # 5. android/app/build.gradle
+          cat << 'EOF' > android/app/build.gradle
+          plugins {
+              id "com.android.application"
+              id "kotlin-android"
+              id "dev.flutter.flutter-gradle-plugin"
+          }
+
+          android {
+              namespace = "com.taxialbalad.driver_app"
+              compileSdk = 34
+              ndkVersion = flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_1_8
+                  targetCompatibility = JavaVersion.VERSION_1_8
+              }
+
+              kotlinOptions {
+                  jvmTarget = JavaVersion.VERSION_1_8
+              }
+
+              defaultConfig {
+                  applicationId = "com.taxialbalad.driver_app"
+                  minSdk = 23
+                  targetSdk = 34
+                  versionCode = flutter.versionCode
+                  versionName = flutter.versionName
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.debug
+                      proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                  }
+              }
+          }
+
+          flutter {
+              source = "../.."
+          }
+          EOF
+
+          # 6. Android Manifest (Arka Plan Servis + Bildirim İzinleri)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -96,6 +141,7 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
               <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+              
               <application
                   android:label="كابتن تكسي البلد"
                   android:name="${applicationName}"
@@ -128,7 +174,7 @@ jobs:
           </manifest>
           EOF
 
-          # 5. Flutter Uygulama Kodu (lib/main.dart)
+          # 7. Dart Uygulama Kodu (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -140,6 +186,84 @@ jobs:
           import 'package:wakelock_plus/wakelock_plus.dart';
 
           const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
+
+          @pragma('vm:entry-point')
+          void startCallback() {
+            FlutterForegroundTask.setTaskHandler(DriverTaskHandler());
+          }
+
+          class DriverTaskHandler extends TaskHandler {
+            String? driverKey;
+
+            @override
+            Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+              driverKey = await FlutterForegroundTask.getData<String>(key: 'activeDriverKey');
+            }
+
+            @override
+            Future<void> onRepeatEvent(DateTime timestamp) async {
+              driverKey ??= await FlutterForegroundTask.getData<String>(key: 'activeDriverKey');
+              if (driverKey == null || driverKey!.isEmpty) return;
+
+              try {
+                Position pos = await Geolocator.getCurrentPosition(
+                  desiredAccuracy: LocationAccuracy.high,
+                );
+                int now = DateTime.now().millisecondsSinceEpoch;
+                
+                await http.patch(
+                  Uri.parse("$FIREBASE_URL/$driverKey.json"),
+                  body: json.encode({
+                    'lat': pos.latitude,
+                    'lng': pos.longitude,
+                    'latitude': pos.latitude,
+                    'longitude': pos.longitude,
+                    'speed': pos.speed > 0 ? pos.speed : 0.2,
+                    'heading': pos.heading,
+                    'bearing': pos.heading,
+                    'accuracy': pos.accuracy,
+                    'isMoving': true,
+                    'status': 'available',
+                    'isOnline': true,
+                    'online': true,
+                    'active': true,
+                    'workingStatus': 'working',
+                    'lastGpsUpdate': now,
+                    'lastActive': now,
+                    'timestamp': now,
+                    'location': {
+                      'lat': pos.latitude,
+                      'lng': pos.longitude,
+                      'latitude': pos.latitude,
+                      'longitude': pos.longitude,
+                      'speed': pos.speed > 0 ? pos.speed : 0.2,
+                      'heading': pos.heading,
+                      'timestamp': now,
+                    }
+                  }),
+                );
+              } catch (_) {}
+            }
+
+            @override
+            Future<void> onDestroy(DateTime timestamp) async {}
+
+            @override
+            void onReceiveData(Object data) {
+              if (data is Map && data.containsKey('key')) {
+                driverKey = data['key']?.toString();
+              }
+            }
+
+            @override
+            void onNotificationButtonPressed(String id) {}
+
+            @override
+            void onNotificationPressed() {}
+
+            @override
+            void onNotificationDismissed() {}
+          }
 
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
@@ -169,7 +293,6 @@ jobs:
             String activeKey = "";
             String liveGpsText = "GPS نشط (جاري الإرسال...)";
             StreamSubscription<Position>? _positionStream;
-            Timer? _locationTimer;
 
             @override
             void initState() {
@@ -189,7 +312,7 @@ jobs:
                 ),
                 iosNotificationOptions: const IOSNotificationOptions(),
                 foregroundTaskOptions: const ForegroundTaskOptions(
-                  interval: 3000,
+                  interval: 2500,
                   isOnceEvent: false,
                   autoRunOnBoot: false,
                   allowWakeLock: true,
@@ -201,7 +324,6 @@ jobs:
             void dispose() {
               WidgetsBinding.instance.removeObserver(this);
               _positionStream?.cancel();
-              _locationTimer?.cancel();
               super.dispose();
             }
 
@@ -253,7 +375,7 @@ jobs:
 
                 FlutterForegroundTask.updateService(
                   notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
-                  notificationText: 'جاري إرسال موقعك مباشرة | متاح لاستقبال الطلبات',
+                  notificationText: 'جاري إرسال موقعك مباشرة | متاح للزبائن',
                 );
 
                 if (mounted) {
@@ -279,10 +401,19 @@ jobs:
                 await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                await FlutterForegroundTask.startService(
-                  notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
-                  notificationText: 'جاري إرسال موقعك مباشرة إلى لوحة التحكم',
-                );
+                await FlutterForegroundTask.saveData(key: 'activeDriverKey', value: key);
+
+                if (await FlutterForegroundTask.isRunningService) {
+                  await FlutterForegroundTask.restartService();
+                } else {
+                  await FlutterForegroundTask.startService(
+                    notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
+                    notificationText: 'جاري إرسال موقعك مباشرة إلى لوحة التحكم',
+                    callback: startCallback,
+                  );
+                }
+
+                FlutterForegroundTask.sendDataToTask({'key': key});
 
                 int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
@@ -311,16 +442,6 @@ jobs:
                   onError: (err) {},
                 );
 
-                _locationTimer?.cancel();
-                _locationTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-                  try {
-                    Position p = await Geolocator.getCurrentPosition(
-                      desiredAccuracy: LocationAccuracy.high,
-                    );
-                    await sendLocationToFirebase(p);
-                  } catch (_) {}
-                });
-
                 if (mounted) {
                   setState(() {
                     isOnline = true;
@@ -336,8 +457,6 @@ jobs:
             void handlePause() async {
               _positionStream?.cancel();
               _positionStream = null;
-              _locationTimer?.cancel();
-              _locationTimer = null;
               WakelockPlus.disable();
               await FlutterForegroundTask.stopService();
 
@@ -753,7 +872,7 @@ jobs:
           }
           EOF
 
-          # 6. APK Derleme
+          # 8. APK Derleme
           flutter build apk --release
 
       - name: Upload APK
