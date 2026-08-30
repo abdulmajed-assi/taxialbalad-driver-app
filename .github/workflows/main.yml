@@ -9,6 +9,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
@@ -23,40 +26,75 @@ jobs:
 
       - name: Build Driver Application
         run: |
-          rm -rf *
+          # 1. Depodaki logo.jpg dosyasını geçici alana kopyala
+          mkdir -p /tmp/taxi_assets
+          if [ -f "logo.jpg" ]; then
+            cp logo.jpg /tmp/taxi_assets/logo.jpg
+          elif [ -f "logo.png" ]; then
+            cp logo.png /tmp/taxi_assets/logo.jpg
+          fi
+
+          # 2. Temiz Flutter Projesi Oluştur
           flutter config --no-analytics
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Gerekli Paketler
-          flutter pub add geolocator http permission_handler wakelock_plus
+          # 3. Paketleri Ekle
+          flutter pub add geolocator http permission_handler wakelock_plus flutter_foreground_task
 
-          # 2. Gradle JVM ve AndroidX Ayarları
+          # 4. Assets Klasörü ve Logoyu Taşı
+          mkdir -p assets
+          if [ -f "/tmp/taxi_assets/logo.jpg" ]; then
+            cp /tmp/taxi_assets/logo.jpg assets/logo.jpg
+          fi
+
+          # 5. pubspec.yaml Güncelle
+          cat << 'EOF' > pubspec.yaml
+          name: driver_app
+          description: Taxi Al Balad Driver Standalone App
+          publish_to: 'none'
+          version: 1.0.0+1
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+          dependencies:
+            flutter:
+              sdk: flutter
+            geolocator: ^13.0.2
+            http: ^1.2.0
+            permission_handler: ^11.3.1
+            wakelock_plus: ^1.2.8
+            flutter_foreground_task: ^8.18.0
+          flutter:
+            uses-material-design: true
+            assets:
+              - assets/logo.jpg
+          EOF
+
+          # 6. Gradle JVM ve AndroidX Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # 3. Kotlin 1.9.22 Güncellemesi
+          # 7. Kotlin ve SDK Sürümleri
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
-
-          # 4. SDK ve Debug İmzalama
           sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
           sed -i 's/signingConfig signingConfigs.release/signingConfig signingConfigs.debug/g' android/app/build.gradle
 
-          # 5. Android Manifest (Arka Plan ve GPS İzinleri)
+          # 8. Android Manifest (Arka Plan Servisi ve Bildirimler)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
-              
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
               <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
               <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
               
               <application
@@ -64,6 +102,10 @@ jobs:
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true">
+                  <service 
+                      android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+                      android:foregroundServiceType="location"
+                      android:stopWithTask="false" />
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -87,21 +129,18 @@ jobs:
           </manifest>
           EOF
 
-          # 6. Orijinal Logo + Kesintisiz GPS Kodları (lib/main.dart)
+          # 9. Tam Canlı Bildirimli ve GPS Döngülü Kod (lib/main.dart)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
-          import 'dart:typed_data';
           import 'package:flutter/material.dart';
+          import 'package:flutter_foreground_task/flutter_foreground_task.dart';
           import 'package:geolocator/geolocator.dart';
           import 'package:http/http.dart' as http;
           import 'package:permission_handler/permission_handler.dart';
           import 'package:wakelock_plus/wakelock_plus.dart';
 
           const String FIREBASE_URL = "https://taxialbalad-85453-default-rtdb.europe-west1.firebasedatabase.app/drivers";
-
-          // Orijinal Logo (Base64)
-          const String LOGO_BASE64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/4gIYSUNDX1BST0ZJTEUAAQEAAAIIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAAHRyWFlaAAABZAAAABRnWFlaAAABeAAAABRiWFlaAAABjAAAABRyVFJDAAABoAAAAChnVFJDAAABoAAAAChiVFJDAAABoAAAACh3dHB0AAAByAAAABRjcHJ0AAAB3AAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAFgAAAAcAHMAUgBHAEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFhZWiAAAAAAAABvogAAOPUAAAOQWFlaIAAAAAAAAGKZAAC3hQAAGNpYWVogAAAAAAAAJKAAAA+EAAC2z3BhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABYWVogAAAAAAAA9tYAAQAAAADTLW1sdWMAAAAAAAAAAQAAAAxlblVTAAAAIAAAABwARwBvAG8AZwBsAGUAIABJAG4AYwAuACAAMgAwADEANv/bAEMABAMDAwMDBAMDBAYEA4OIBwcHBwcICwkKCQsJDBAMDAwMDAwQDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/bAEMBBAQEBwcHDAcHDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDP/AABEIAJsAmgMBIgACEQEDEQH/xAAZAAEBAQEBAQAAAAAAAAAAAAAAAgEDBAb/xAAjEAACAgEEAwEBAQEAAAAAAAAAAQIRAxIhMUFRcQSBgWET/8QAFwEBAQEBAAAAAAAAAAAAAAAAAAECA//EABwRAQEBAAMBAQEAAAAAAAAAAAARASExAiJBYf/aAAwDAQACEQMRAD8A/sPj0Zt5N41Q26fA+Fh530vHkbb/AJyNv+cDfovb7Nq8mzcvL4Hj55Hj55G3TL2+zNq8vhjbr+cG7dceQ345C528/jM28/jM398eQtvfkbl6X+Taq755G3X85G3TyG/T7M27zvyNv+cDf0/5yNuqeQ36r79M2ry/jG1+XwbV5/A36/nJm1eXwNuuvI2665G3/ORt5f7wG/T/nJm3l/g2665G3TyG7en2ZtXl8Dbp/A36/nI36f84NuquzNv+cG1eXwb9P4G7en2Zu3l8Dbp8Dfqu/Q3bv8AGZu3l8DbryG/T7M3by/wbb+fwb9V3yNuufA3b0v8m7VfPI28vnkPj55C528/jNu3nkNu/wA5G3TyG3X4bV5/DO/fnkbdfjkNu3l8Dbp5G/TyG/TyNuq75D4+eQ+PnkNuufw2ry+Bu1fyNuunkbddPkb9P4G3TyNuuuQNuvwbb/nJm3T4G3f4G3TyG3X85G3TyG3TyG3TyG3TyNuuuRv08h8fPI26eQ36eRv0/gbdVeQNun8DbrrkbdPI26eRv0/gbdP4G3TyNuuuRv08jfpyH/9k=";
 
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
@@ -129,21 +168,34 @@ jobs:
             int remainingDays = 7;
             String expiryDate = "5/9/2026";
             String activeKey = "";
-            String liveGpsText = "GPS نشط (جاري التحديد...)";
+            String liveGpsText = "GPS نشط (جاري الإرسال...)";
             StreamSubscription<Position>? _positionStream;
             Timer? _locationTimer;
-
-            late final Uint8List logoBytes;
 
             @override
             void initState() {
               super.initState();
               WidgetsBinding.instance.addObserver(this);
-              try {
-                logoBytes = base64Decode(LOGO_BASE64);
-              } catch (_) {
-                logoBytes = Uint8List(0);
-              }
+              _initForegroundTask();
+            }
+
+            void _initForegroundTask() {
+              FlutterForegroundTask.init(
+                androidNotificationOptions: AndroidNotificationOptions(
+                  channelId: 'taxi_driver_status',
+                  channelName: 'خدمة التتبع المباشر',
+                  channelDescription: 'إرسال موقع السائق بشكل مباشر ومستمر',
+                  channelImportance: NotificationChannelImportance.HIGH,
+                  priority: NotificationPriority.HIGH,
+                ),
+                iosNotificationOptions: const IOSNotificationOptions(),
+                foregroundTaskOptions: const ForegroundTaskOptions(
+                  interval: 3000,
+                  isOnceEvent: false,
+                  autoRunOnBoot: false,
+                  allowWakeLock: true,
+                ),
+              );
             }
 
             @override
@@ -161,20 +213,21 @@ jobs:
               }
             }
 
-            Future<void> sendLocationData(Position pos) async {
+            Future<void> sendLocationToFirebase(Position pos) async {
               if (activeKey.isEmpty) return;
               try {
                 int now = DateTime.now().millisecondsSinceEpoch;
-                Map<String, dynamic> updateData = {
+                
+                Map<String, dynamic> payload = {
                   'lat': pos.latitude,
                   'lng': pos.longitude,
                   'latitude': pos.latitude,
                   'longitude': pos.longitude,
-                  'speed': pos.speed > 0 ? pos.speed : 0.0,
+                  'speed': pos.speed > 0 ? pos.speed : 0.2,
                   'heading': pos.heading,
                   'bearing': pos.heading,
                   'accuracy': pos.accuracy,
-                  'isMoving': pos.speed > 0.4,
+                  'isMoving': true,
                   'status': 'available',
                   'isOnline': true,
                   'online': true,
@@ -183,16 +236,30 @@ jobs:
                   'lastGpsUpdate': now,
                   'lastActive': now,
                   'timestamp': now,
+                  'location': {
+                    'lat': pos.latitude,
+                    'lng': pos.longitude,
+                    'latitude': pos.latitude,
+                    'longitude': pos.longitude,
+                    'speed': pos.speed > 0 ? pos.speed : 0.2,
+                    'heading': pos.heading,
+                    'timestamp': now,
+                  }
                 };
 
                 await http.patch(
                   Uri.parse("$FIREBASE_URL/$activeKey.json"),
-                  body: json.encode(updateData),
+                  body: json.encode(payload),
+                );
+
+                FlutterForegroundTask.updateService(
+                  notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
+                  notificationText: 'جاري إرسال موقعك مباشرة | متاح لاستقبال الطلبات',
                 );
 
                 if (mounted) {
                   setState(() {
-                    liveGpsText = "GPS نشط ($driverCity)";
+                    liveGpsText = "GPS نشط (الموقع يُرسل مباشرة $driverCity)";
                   });
                 }
               } catch (_) {}
@@ -200,7 +267,6 @@ jobs:
 
             Future<void> startTracking(String key) async {
               try {
-                // İzinler
                 await Permission.notification.request();
                 LocationPermission permission = await Geolocator.checkPermission();
                 if (permission == LocationPermission.denied) {
@@ -214,7 +280,14 @@ jobs:
                 await WakelockPlus.enable();
                 await Permission.ignoreBatteryOptimizations.request();
 
-                // 1. Doğrudan Anında Online Yap
+                // Üst Bildirim Başlatma
+                await FlutterForegroundTask.startService(
+                  notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
+                  notificationText: 'جاري إرسال موقعك مباشرة إلى لوحة التحكم',
+                );
+
+                // İlk Online Ping
+                int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
                   Uri.parse("$FIREBASE_URL/$key.json"),
                   body: json.encode({
@@ -223,32 +296,33 @@ jobs:
                     'online': true,
                     'active': true,
                     'workingStatus': 'working',
-                    'lastActive': DateTime.now().millisecondsSinceEpoch,
+                    'lastActive': now,
+                    'timestamp': now,
                   }),
                 );
 
-                // 2. Canlı GPS Stream
+                // Kesintisiz GPS Dinleme
                 const LocationSettings locationSettings = LocationSettings(
-                  accuracy: LocationAccuracy.high,
+                  accuracy: LocationAccuracy.bestForNavigation,
                   distanceFilter: 0,
                 );
 
                 _positionStream?.cancel();
                 _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen(
                   (Position position) {
-                    sendLocationData(position);
+                    sendLocationToFirebase(position);
                   },
                   onError: (err) {},
                 );
 
-                // 3. Kesintisiz Timer (Her 3 saniyede bir konumu güncelle)
+                // Periyodik Yedekleme Döngüsü (Her 2 saniyede bir zorunlu canlı sinyal)
                 _locationTimer?.cancel();
-                _locationTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+                _locationTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
                   try {
                     Position p = await Geolocator.getCurrentPosition(
                       desiredAccuracy: LocationAccuracy.high,
                     );
-                    await sendLocationData(p);
+                    await sendLocationToFirebase(p);
                   } catch (_) {}
                 });
 
@@ -270,6 +344,7 @@ jobs:
               _locationTimer?.cancel();
               _locationTimer = null;
               WakelockPlus.disable();
+              await FlutterForegroundTask.stopService();
 
               if (activeKey.isNotEmpty) {
                 try {
@@ -376,7 +451,7 @@ jobs:
               );
             }
 
-            Widget buildActualLogo() {
+            Widget buildOriginalLogo() {
               return Container(
                 width: 106,
                 height: 106,
@@ -386,19 +461,20 @@ jobs:
                   border: Border.all(color: const Color(0xFFFFB800), width: 3),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.4),
+                      color: Colors.black.withOpacity(0.35),
                       blurRadius: 10,
                       offset: const Offset(0, 3),
                     )
                   ],
                 ),
                 child: ClipOval(
-                  child: logoBytes.isNotEmpty
-                      ? Image.memory(
-                          logoBytes,
-                          fit: BoxFit.cover,
-                        )
-                      : const Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 48),
+                  child: Image.asset(
+                    'assets/logo.jpg',
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 48);
+                    },
+                  ),
                 ),
               );
             }
@@ -424,11 +500,10 @@ jobs:
                             children: [
                               buildTaxiCheckerBorder(),
                               const SizedBox(height: 22),
-                              buildActualLogo(),
+                              buildOriginalLogo(),
                               const SizedBox(height: 18),
                               
                               if (!isOnline) ...[
-                                // GİRİŞ EKRANI (1:1 Orijinal Tema)
                                 const Text(
                                   "تكسي البلد | كابتن",
                                   style: TextStyle(
@@ -517,11 +592,33 @@ jobs:
                                   ),
                                 ),
                               ] else ...[
-                                // SÜRÜCÜ PANELİ (1:1 Orijinal Tema)
                                 Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 18),
                                   child: Column(
                                     children: [
+                                      // Canlı Durum Başlık Bilgilendirmesi
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1B3D2B).withOpacity(0.6),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: const Color(0xFF2ECC71).withOpacity(0.4)),
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: const [
+                                            Icon(Icons.check_circle, color: Color(0xFF2ECC71), size: 16),
+                                            SizedBox(width: 6),
+                                            Text(
+                                              "الموقع يُرسل مباشرة • أنت نشط ومتاح للزبائن",
+                                              style: TextStyle(color: Color(0xFF2ECC71), fontWeight: FontWeight.bold, fontSize: 12),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 12),
+
                                       // Sürücü Kartı
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -532,7 +629,6 @@ jobs:
                                         child: Row(
                                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                           children: [
-                                            // Sol Yeşil Durum Butonu
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                                               decoration: BoxDecoration(
@@ -547,7 +643,6 @@ jobs:
                                                 ],
                                               ),
                                             ),
-                                            // Sağ Sürücü Bilgisi
                                             Column(
                                               crossAxisAlignment: CrossAxisAlignment.end,
                                               children: [
@@ -669,7 +764,7 @@ jobs:
           }
           EOF
 
-          # 7. APK Derleme
+          # 10. APK Derleme
           flutter build apk --release
 
       - name: Upload APK
@@ -677,6 +772,7 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+
 
 
 
