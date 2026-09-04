@@ -30,7 +30,7 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Assets Klasörü ve Logo Güvencesi
+          # 1. Logo Güvencesi
           mkdir -p assets
           if [ -f "../logo.jpg" ]; then
             cp ../logo.jpg assets/logo.jpg
@@ -77,7 +77,7 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # 4. ProGuard Kuralları (Release Çökmelerini Engeller)
+          # 4. ProGuard / R8 Kuralları
           cat << 'EOF' > android/app/proguard-rules.pro
           -keep class com.pravera.flutter_foreground_task.** { *; }
           -keep class com.baseflow.geolocator.** { *; }
@@ -85,7 +85,7 @@ jobs:
           -dontwarn okio.**
           EOF
 
-          # 5. android/app/build.gradle
+          # 5. android/app/build.gradle (minSdkVersion 23 Kesin)
           cat << 'EOF' > android/app/build.gradle
           plugins {
               id "com.android.application"
@@ -128,7 +128,7 @@ jobs:
           }
           EOF
 
-          # 6. Android Manifest (Arka Plan Servis + Bildirim İzinleri)
+          # 6. Android Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -174,7 +174,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Dart Uygulama Kodu (lib/main.dart)
+          # 7. Tam Arayüz ve Arka Plan GPS Kodu
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -567,27 +567,30 @@ jobs:
 
             Widget buildOriginalLogo() {
               return Container(
-                width: 106,
-                height: 106,
+                width: 110,
+                height: 110,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: Colors.white,
-                  border: Border.all(color: const Color(0xFFFFB800), width: 3),
+                  border: Border.all(color: const Color(0xFFFFB800), width: 3.5),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.35),
+                      color: Colors.black.withOpacity(0.4),
                       blurRadius: 10,
                       offset: const Offset(0, 3),
                     )
                   ],
                 ),
                 child: ClipOval(
-                  child: Image.asset(
-                    'assets/logo.jpg',
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 48);
-                    },
+                  child: Padding(
+                    padding: const EdgeInsets.all(4.0),
+                    child: Image.asset(
+                      'assets/logo.jpg',
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Icon(Icons.local_taxi, color: Color(0xFFFFB800), size: 48);
+                      },
+                    ),
                   ),
                 ),
               );
