@@ -30,7 +30,7 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Logo Güvencesi
+          # 1. Logo Dosyası Güvencesi
           mkdir -p assets
           if [ -f "../logo.jpg" ]; then
             cp ../logo.jpg assets/logo.jpg
@@ -45,7 +45,7 @@ jobs:
           '
           fi
 
-          # 2. pubspec.yaml
+          # 2. pubspec.yaml Tanımı
           cat << 'EOF' > pubspec.yaml
           name: driver_app
           description: Taxi Al Balad Driver Standalone App
@@ -77,7 +77,7 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # 4. ProGuard Kuralları
+          # 4. ProGuard / R8 Kuralları
           cat << 'EOF' > android/app/proguard-rules.pro
           -keep class com.pravera.flutter_foreground_task.** { *; }
           -keep class com.baseflow.geolocator.** { *; }
@@ -85,7 +85,7 @@ jobs:
           -dontwarn okio.**
           EOF
 
-          # 5. android/app/build.gradle (Sabit versionCode & versionName)
+          # 5. android/app/build.gradle
           cat << 'EOF' > android/app/build.gradle
           plugins {
               id "com.android.application"
@@ -174,10 +174,11 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Tam Arayüz ve Arka Plan GPS Kodu
+          # 7. Dart Kodu (v7 Uyumlu TaskHandler)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
+          import 'dart:isolate';
           import 'package:flutter/material.dart';
           import 'package:flutter_foreground_task/flutter_foreground_task.dart';
           import 'package:geolocator/geolocator.dart';
@@ -196,12 +197,12 @@ jobs:
             String? driverKey;
 
             @override
-            Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+            void onStart(DateTime timestamp, SendPort? sendPort) async {
               driverKey = await FlutterForegroundTask.getData<String>(key: 'activeDriverKey');
             }
 
             @override
-            Future<void> onRepeatEvent(DateTime timestamp) async {
+            void onRepeatEvent(DateTime timestamp, SendPort? sendPort) async {
               driverKey ??= await FlutterForegroundTask.getData<String>(key: 'activeDriverKey');
               if (driverKey == null || driverKey!.isEmpty) return;
 
@@ -246,14 +247,7 @@ jobs:
             }
 
             @override
-            Future<void> onDestroy(DateTime timestamp) async {}
-
-            @override
-            void onReceiveData(Object data) {
-              if (data is Map && data.containsKey('key')) {
-                driverKey = data['key']?.toString();
-              }
-            }
+            void onDestroy(DateTime timestamp, SendPort? sendPort) async {}
 
             @override
             void onNotificationButtonPressed(String id) {}
@@ -386,7 +380,7 @@ jobs:
               } catch (_) {}
             }
 
-            Future<startTracking> startTracking(String key) async {
+            Future<void> startTracking(String key) async {
               try {
                 await Permission.notification.request();
                 LocationPermission permission = await Geolocator.checkPermission();
@@ -412,8 +406,6 @@ jobs:
                     callback: startCallback,
                   );
                 }
-
-                FlutterForegroundTask.sendDataToTask({'key': key});
 
                 int now = DateTime.now().millisecondsSinceEpoch;
                 await http.patch(
