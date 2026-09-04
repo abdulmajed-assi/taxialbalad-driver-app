@@ -175,7 +175,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Dart Kodu (Sıralı ve Doğrudan İzin İsteme Mekanizması)
+          # 7. Dart Kodu (Sessiz ve Sabit Bildirim - Kesintisiz Arka Plan GPS)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -314,11 +314,14 @@ jobs:
             void _initForegroundTask() {
               FlutterForegroundTask.init(
                 androidNotificationOptions: AndroidNotificationOptions(
-                  channelId: 'taxi_driver_status',
+                  channelId: 'taxi_driver_status_silent',
                   channelName: 'خدمة التتبع المباشر',
                   channelDescription: 'إرسال موقع السائق بشكل مباشر ومستمر',
-                  channelImportance: NotificationChannelImportance.HIGH,
-                  priority: NotificationPriority.HIGH,
+                  channelImportance: NotificationChannelImportance.LOW,
+                  priority: NotificationPriority.LOW,
+                  playSound: false,
+                  enableVibration: false,
+                  showWhen: false,
                 ),
                 iosNotificationOptions: const IOSNotificationOptions(),
                 foregroundTaskOptions: const ForegroundTaskOptions(
@@ -383,11 +386,6 @@ jobs:
                   body: json.encode(payload),
                 );
 
-                FlutterForegroundTask.updateService(
-                  notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
-                  notificationText: 'جاري إرسال موقعك مباشرة | متاح للزبائن',
-                );
-
                 if (mounted) {
                   setState(() {
                     liveGpsText = "GPS نشط (الموقع يُرسل مباشرة $driverCity)";
@@ -422,7 +420,7 @@ jobs:
                 } else {
                   await FlutterForegroundTask.startService(
                     notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
-                    notificationText: 'جاري إرسال موقعك مباشرة إلى لوحة التحكم',
+                    notificationText: 'أنت متصل الآن وجاري إرسال الموقع باستمرار',
                     callback: startCallback,
                   );
                 }
@@ -507,7 +505,7 @@ jobs:
               String pass = _pass.text.trim();
               if (p.isEmpty || pass.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("يرجى إدخال رقم الهاتف ورمز المرور")),
+                  const SnackBar(content: Text("يرjى إدخال رقم الهاتف ورمز المرور")),
                 );
                 return;
               }
