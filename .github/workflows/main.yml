@@ -128,7 +128,7 @@ jobs:
           }
           EOF
 
-          # 6. Android Manifest (Uygulama Kapalıyken de Servisin Yaşaması İçin StopWithTask False Ayarlı)
+          # 6. Android Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -175,7 +175,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Dart Kodu
+          # 7. Dart Kodu (Sıralı ve Doğrudan İzin İsteme Mekanizması)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -294,6 +294,21 @@ jobs:
               super.initState();
               WidgetsBinding.instance.addObserver(this);
               _initForegroundTask();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _requestInitialPermissions();
+              });
+            }
+
+            Future<void> _requestInitialPermissions() async {
+              await Permission.notification.request();
+              LocationPermission permission = await Geolocator.checkPermission();
+              if (permission == LocationPermission.denied) {
+                permission = await Geolocator.requestPermission();
+              }
+              if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+                await Permission.locationAlways.request();
+              }
+              await Permission.ignoreBatteryOptimizations.request();
             }
 
             void _initForegroundTask() {
@@ -391,6 +406,10 @@ jobs:
                 if (permission == LocationPermission.deniedForever) {
                   await openAppSettings();
                   return;
+                }
+
+                if (permission == LocationPermission.whileInUse) {
+                  await Permission.locationAlways.request();
                 }
 
                 await WakelockPlus.enable();
@@ -876,4 +895,3 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
-          
