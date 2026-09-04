@@ -128,7 +128,7 @@ jobs:
           }
           EOF
 
-          # 6. Android Manifest
+          # 6. Android Manifest (Uygulama Kapalıyken de Servisin Yaşaması İçin StopWithTask False Ayarlı)
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.taxialbalad.driver_app">
@@ -150,6 +150,7 @@ jobs:
                   <service 
                       android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
                       android:foregroundServiceType="location"
+                      android:stopWithTask="false"
                       android:exported="false" />
                   <activity
                       android:name=".MainActivity"
@@ -174,7 +175,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Dart Kodu (v7 Uyumlu TaskHandler)
+          # 7. Dart Kodu
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -308,7 +309,7 @@ jobs:
                 foregroundTaskOptions: const ForegroundTaskOptions(
                   interval: 2500,
                   isOnceEvent: false,
-                  autoRunOnBoot: false,
+                  autoRunOnBoot: true,
                   allowWakeLock: true,
                 ),
               );
@@ -875,3 +876,4 @@ jobs:
         with:
           name: driver-apk
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
+          
