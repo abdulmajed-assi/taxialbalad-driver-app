@@ -30,7 +30,7 @@ jobs:
           flutter create --org com.taxialbalad --project-name driver_app build_app
           cd build_app
           
-          # 1. Logo Dosyası Güvencesi
+          # 1. Logo Dosyası
           mkdir -p assets
           if [ -f "../logo.jpg" ]; then
             cp ../logo.jpg assets/logo.jpg
@@ -45,7 +45,7 @@ jobs:
           '
           fi
 
-          # 2. pubspec.yaml Tanımı
+          # 2. pubspec.yaml
           cat << 'EOF' > pubspec.yaml
           name: driver_app
           description: Taxi Al Balad Driver Standalone App
@@ -69,7 +69,7 @@ jobs:
 
           flutter pub get
 
-          # 3. Gradle JVM Ayarları
+          # 3. Gradle Ayarları
           echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m" >> android/gradle.properties
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
@@ -77,7 +77,7 @@ jobs:
           sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.22"/g' android/settings.gradle
           sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.22'/g" android/build.gradle
 
-          # 4. ProGuard / R8 Kuralları
+          # 4. ProGuard
           cat << 'EOF' > android/app/proguard-rules.pro
           -keep class com.pravera.flutter_foreground_task.** { *; }
           -keep class com.baseflow.geolocator.** { *; }
@@ -175,7 +175,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. Dart Kodu (Sessiz ve Sabit Bildirim - Kesintisiz Arka Plan GPS)
+          # 7. Dart Kodu (Spotify Gibi Sabit & Sıfır Ses/Titreşimli Bildirim)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -204,47 +204,7 @@ jobs:
 
             @override
             void onRepeatEvent(DateTime timestamp, SendPort? sendPort) async {
-              driverKey ??= await FlutterForegroundTask.getData<String>(key: 'activeDriverKey');
-              if (driverKey == null || driverKey!.isEmpty) return;
-
-              try {
-                Position pos = await Geolocator.getCurrentPosition(
-                  desiredAccuracy: LocationAccuracy.high,
-                );
-                int now = DateTime.now().millisecondsSinceEpoch;
-                
-                await http.patch(
-                  Uri.parse("$FIREBASE_URL/$driverKey.json"),
-                  body: json.encode({
-                    'lat': pos.latitude,
-                    'lng': pos.longitude,
-                    'latitude': pos.latitude,
-                    'longitude': pos.longitude,
-                    'speed': pos.speed > 0 ? pos.speed : 0.2,
-                    'heading': pos.heading,
-                    'bearing': pos.heading,
-                    'accuracy': pos.accuracy,
-                    'isMoving': true,
-                    'status': 'available',
-                    'isOnline': true,
-                    'online': true,
-                    'active': true,
-                    'workingStatus': 'working',
-                    'lastGpsUpdate': now,
-                    'lastActive': now,
-                    'timestamp': now,
-                    'location': {
-                      'lat': pos.latitude,
-                      'lng': pos.longitude,
-                      'latitude': pos.latitude,
-                      'longitude': pos.longitude,
-                      'speed': pos.speed > 0 ? pos.speed : 0.2,
-                      'heading': pos.heading,
-                      'timestamp': now,
-                    }
-                  }),
-                );
-              } catch (_) {}
+              // Bildirim güncelleme döngüsü tamamen kaldırıldı, sistem sıfır ses ile çalışır.
             }
 
             @override
@@ -314,18 +274,18 @@ jobs:
             void _initForegroundTask() {
               FlutterForegroundTask.init(
                 androidNotificationOptions: AndroidNotificationOptions(
-                  channelId: 'taxi_driver_status_silent',
+                  channelId: 'taxi_driver_silent_v2',
                   channelName: 'خدمة التتبع المباشر',
                   channelDescription: 'إرسال موقع السائق بشكل مباشر ومستمر',
-                  channelImportance: NotificationChannelImportance.LOW,
-                  priority: NotificationPriority.LOW,
+                  channelImportance: NotificationChannelImportance.MIN,
+                  priority: NotificationPriority.MIN,
                   playSound: false,
                   enableVibration: false,
                   showWhen: false,
                 ),
                 iosNotificationOptions: const IOSNotificationOptions(),
                 foregroundTaskOptions: const ForegroundTaskOptions(
-                  interval: 2500,
+                  interval: 60000,
                   isOnceEvent: false,
                   autoRunOnBoot: true,
                   allowWakeLock: true,
@@ -419,8 +379,8 @@ jobs:
                   await FlutterForegroundTask.restartService();
                 } else {
                   await FlutterForegroundTask.startService(
-                    notificationTitle: '🚖 كابتن تكسي البلد - متصل ونشط',
-                    notificationText: 'أنت متصل الآن وجاري إرسال الموقع باستمرار',
+                    notificationTitle: '🚖 كابتن تكسي البلد',
+                    notificationText: 'أنت متصل بالخدمة الآن وجاهز لاستقبال الطلبات',
                     callback: startCallback,
                   );
                 }
@@ -505,7 +465,7 @@ jobs:
               String pass = _pass.text.trim();
               if (p.isEmpty || pass.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("يرjى إدخال رقم الهاتف ورمز المرور")),
+                  const SnackBar(content: Text("يرجى إدخال رقم الهاتف ورمز المرور")),
                 );
                 return;
               }
